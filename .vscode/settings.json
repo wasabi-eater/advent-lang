@@ -1,0 +1,8 @@
+{
+    "terminal.integrated.env.windows": {
+        "RUSTFLAGS": "-Csymbol-mangling-version=v0"
+    },
+    "files.watcherExclude": {
+        "**/target": true
+    }
+}

@@ -1,0 +1,15 @@
+[package]
+name = "advent-lang"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chumsky = "0.11.2"
+fxhash = "0.2.1"
+id-arena = "2.2.1"
+im-rc = "15.1.0"
+indoc = "2.0.7"
+itertools = "0.14.0"
+logos = "0.15.1"
+maplit = "1.0.2"
+typed-arena = "2.0.2"

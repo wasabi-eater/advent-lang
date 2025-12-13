@@ -1,176 +1,655 @@
-use crate::analysis::types::{TyVarBody, Type, TypeScheme};
+use crate::{
+    analysis::{
+        inference::InferencePool,
+        types::{TyVarBody, Type, TypeScheme, VarId},
+    },
+    runner,
+};
 use fxhash::FxHashMap;
-use id_arena::Arena;
-use im_rc::Vector;
-use std::rc::Rc;
-pub fn def_func(
-    name: impl Into<Rc<str>>,
-    type_scheme: impl Into<TypeScheme>,
-    funcs: &mut FxHashMap<Rc<str>, Vector<TypeScheme>>,
-) {
-    funcs
-        .entry(name.into())
-        .or_default()
-        .push_back(type_scheme.into());
+
+macro_rules! native_func {
+    ($runner_ident:ident, $p:pat => $body:expr) => {
+        runner::obj::Object::Func(runner::obj::Func::NativeFunc(Rc::new(
+            move |$runner_ident: &mut runner::core::Runner, arg: Rc<runner::obj::Object>| {
+                match &*arg {
+                    $p => $body,
+                    #[allow(unreachable_patterns)]
+                    _ => panic!("invalid argument type for native function"),
+                }
+            },
+        )))
+    };
 }
-pub fn std_func_types(
-    tyvar_arena: &mut Arena<TyVarBody>,
-) -> FxHashMap<Rc<str>, Vector<TypeScheme>> {
-    let mut funcs = FxHashMap::default();
-    def_func("show", Type::arrow(Type::Int, Type::String), &mut funcs);
-    def_func("show", Type::arrow(Type::Float, Type::String), &mut funcs);
-    def_func("show", Type::arrow(Type::String, Type::String), &mut funcs);
-    def_func("show", Type::arrow(Type::Unit, Type::String), &mut funcs);
-    def_func("show", Type::arrow(Type::Bool, Type::String), &mut funcs);
-    def_func("id", {
-        let a = tyvar_arena.alloc(TyVarBody::new("a"));
-        TypeScheme::forall(
-            [a],
-            Type::arrow(Type::Var(a), Type::Var(a)),
-        )
-    }, &mut funcs);
 
-    def_func("print", Type::arrow(Type::String, Type::Unit), &mut funcs);
-    def_func("+", Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)), &mut funcs);
-    def_func("+", Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)), &mut funcs);
-    def_func("+", Type::arrow(Type::String, Type::arrow(Type::String, Type::String)), &mut funcs);
-    def_func("+", {
-        let a = tyvar_arena.alloc(TyVarBody::new("a"));
-        TypeScheme::forall(
-            [a],
-            Type::arrow(
-                Type::list(Type::Var(a)),
-                Type::list(Type::Var(a)),
+use std::rc::Rc;
+pub struct StdLibDefiner<'a> {
+    inference_pool: &'a mut InferencePool,
+    funcs: FxHashMap<VarId, (Rc<str>, TypeScheme, Rc<runner::obj::Object>)>,
+}
+impl<'a> StdLibDefiner<'a> {
+    pub fn new(inference_pool: &'a mut InferencePool) -> Self {
+        let stdlib = StdLibDefiner {
+            inference_pool,
+            funcs: FxHashMap::default(),
+        };
+        stdlib
+    }
+    pub fn def_func(
+        &mut self,
+        name: impl Into<Rc<str>>,
+        type_scheme: impl Into<TypeScheme>,
+        obj: impl Into<Rc<runner::obj::Object>>,
+    ) {
+        let name = name.into();
+        let type_scheme = type_scheme.into();
+        let var_id = self
+            .inference_pool
+            .extern_func(name.clone(), type_scheme.clone());
+
+        self.funcs
+            .insert(var_id, (name, type_scheme.into(), obj.into()));
+    }
+    fn def_operators(&mut self) {
+        self.def_func(
+            "+",
+            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
+            native_func!(_runner,
+                runner::obj::Object::Int(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Int(b) => {
+                            Ok(Rc::new(runner::obj::Object::Int(a + b)))
+                        }
+                    )))
+                }
             ),
-        )
-    }, &mut funcs);
-    def_func("-", Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)), &mut funcs);
-    def_func("-", Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)), &mut funcs);
-    def_func("*", Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)), &mut funcs);
-    def_func("*", Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)), &mut funcs);
-    def_func("/", Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)), &mut funcs);
-    def_func("/", Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)), &mut funcs);
-    def_func("==", Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Bool)), &mut funcs);
-    def_func("==", Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Bool)), &mut funcs);
-    def_func("==", Type::arrow(Type::String, Type::arrow(Type::String, Type::Bool)), &mut funcs);
-    def_func("==", Type::arrow(Type::Unit, Type::arrow(Type::Unit, Type::Bool)), &mut funcs);
-    def_func("==", Type::arrow(Type::Bool, Type::arrow(Type::Bool, Type::Bool)), &mut funcs);
+        );
+        self.def_func(
+            "+",
+            Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)),
+            native_func!(_runner,
+                runner::obj::Object::Float(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Float(b) => {
+                            Ok(Rc::new(runner::obj::Object::Float(a + b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "+",
+            Type::arrow(Type::String, Type::arrow(Type::String, Type::String)),
+            native_func!(_runner,
+                runner::obj::Object::String(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::String(b) => {
+                            Ok(Rc::new(runner::obj::Object::String(Rc::new(format!("{}{}", a, b)))))
+                        }
+                    )))
+                }
+            ),
+        );
+        let type_scheam = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            TypeScheme::forall(
+                [a],
+                Type::arrow(Type::list(Type::Var(a)), Type::list(Type::Var(a))),
+            )
+        };
+        self.def_func(
+            "+",
+            type_scheam,
+            native_func!(_runner,
+                runner::obj::Object::List(elems) => {
+                    let elems = elems.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::List(elems2) => {
+                            let mut new_elems = elems.clone();
+                            new_elems.extend(elems2.iter().cloned());
+                            Ok(Rc::new(runner::obj::Object::List(new_elems)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "-",
+            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
+            native_func!(_runner,
+                runner::obj::Object::Int(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Int(b) => {
+                            Ok(Rc::new(runner::obj::Object::Int(a - b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "-",
+            Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)),
+            native_func!(_runner,
+                runner::obj::Object::Float(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Float(b) => {
+                            Ok(Rc::new(runner::obj::Object::Float(a - b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "*",
+            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
+            native_func!(_runner,
+                runner::obj::Object::Int(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Int(b) => {
+                            Ok(Rc::new(runner::obj::Object::Int(a * b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "*",
+            Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)),
+            native_func!(_runner,
+                runner::obj::Object::Float(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Float(b) => {
+                            Ok(Rc::new(runner::obj::Object::Float(a * b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "/",
+            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
+            native_func!(_runner,
+                runner::obj::Object::Int(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Int(b) => {
+                            Ok(Rc::new(runner::obj::Object::Int(a / b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "/",
+            Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)),
+            native_func!(_runner,
+                runner::obj::Object::Float(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Float(b) => {
+                            Ok(Rc::new(runner::obj::Object::Float(a / b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "==",
+            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Bool)),
+            native_func!(_runner,
+                runner::obj::Object::Int(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Int(b) => {
+                            Ok(Rc::new(runner::obj::Object::Bool(a == *b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "==",
+            Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Bool)),
+            native_func!(_runner,
+                runner::obj::Object::Float(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Float(b) => {
+                            Ok(Rc::new(runner::obj::Object::Bool(a == *b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "==",
+            Type::arrow(Type::String, Type::arrow(Type::String, Type::Bool)),
+            native_func!(_runner,
+                runner::obj::Object::String(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::String(b) => {
+                            Ok(Rc::new(runner::obj::Object::Bool(a == *b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "==",
+            Type::arrow(Type::Unit, Type::arrow(Type::Unit, Type::Bool)),
+            native_func!(_runner,
+                runner::obj::Object::Unit => {
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Unit => {
+                            Ok(Rc::new(runner::obj::Object::Bool(true)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "==",
+            Type::arrow(Type::Bool, Type::arrow(Type::Bool, Type::Bool)),
+            native_func!(_runner,
+                runner::obj::Object::Bool(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Bool(b) => {
+                            Ok(Rc::new(runner::obj::Object::Bool(a == *b)))
+                        }
+                    )))
+                }
+            ),
+        );
 
-    def_func("-_", Type::arrow(Type::Int, Type::Int), &mut funcs);
-    def_func("-_", Type::arrow(Type::Float, Type::Float), &mut funcs);
-    def_func("!_", Type::arrow(Type::Bool, Type::Bool), &mut funcs);
-    def_func("!_", Type::arrow(Type::Int, Type::Int), &mut funcs);
+        self.def_func(
+            "-_",
+            Type::arrow(Type::Int, Type::Int),
+            native_func!(_runner,
+                runner::obj::Object::Int(a) => Ok(Rc::new(runner::obj::Object::Int(-a)))
+            ),
+        );
+        self.def_func(
+            "-_",
+            Type::arrow(Type::Float, Type::Float),
+            native_func!(_runner,
+                runner::obj::Object::Float(a) => Ok(Rc::new(runner::obj::Object::Float(-a)))
+            ),
+        );
+        self.def_func(
+            "!_",
+            Type::arrow(Type::Bool, Type::Bool),
+            native_func!(_runner,
+                runner::obj::Object::Bool(a) => Ok(Rc::new(runner::obj::Object::Bool(!a)))
+            ),
+        );
+        self.def_func(
+            "!_",
+            Type::arrow(Type::Int, Type::Int),
+            native_func!(_runner,
+                runner::obj::Object::Int(a) => Ok(Rc::new(runner::obj::Object::Int(!a)))
+            ),
+        );
+        self.def_func(
+            "&",
+            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
+            native_func!(_runner,
+                runner::obj::Object::Int(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Int(b) => {
+                            Ok(Rc::new(runner::obj::Object::Int(a & *b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "&",
+            Type::arrow(Type::Bool, Type::arrow(Type::Bool, Type::Bool)),
+            native_func!(_runner,
+                runner::obj::Object::Bool(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Bool(b) => {
+                            Ok(Rc::new(runner::obj::Object::Bool(a & b)))
+                        }
+                    )))
+                }
+            ),
+        );
 
-    
-    def_func("&", Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)), &mut funcs);
-    def_func("&", Type::arrow(Type::Bool, Type::arrow(Type::Bool, Type::Bool)), &mut funcs);
+        self.def_func(
+            "|",
+            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
+            native_func!(_runner,
+                runner::obj::Object::Int(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Int(b) => {
+                            Ok(Rc::new(runner::obj::Object::Int(a | b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "|",
+            Type::arrow(Type::Bool, Type::arrow(Type::Bool, Type::Bool)),
+            native_func!(_runner,
+                runner::obj::Object::Bool(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Bool(b) => {
+                            Ok(Rc::new(runner::obj::Object::Bool(a | b)))
+                        }
+                    )))
+                }
+            ),
+        );
+        self.def_func(
+            "|",
+            Type::arrow(Type::Bool, Type::arrow(Type::Bool, Type::Bool)),
+            native_func!(_runner,
+                runner::obj::Object::Bool(a) => {
+                    let a = a.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Bool(b) => {
+                            Ok(Rc::new(runner::obj::Object::Bool(a | b)))
+                        }
+                    )))
+                }
+            ),
+        );
 
-    def_func("|", Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)), &mut funcs);
-    def_func("|", Type::arrow(Type::Bool, Type::arrow(Type::Bool, Type::Bool)), &mut funcs);
+        let type_scheam = {
+            let tyvar_arena = self.inference_pool.tyvar_arena();
+            let a = tyvar_arena.alloc(TyVarBody::new("a"));
+            let b = tyvar_arena.alloc(TyVarBody::new("b"));
+            let c = tyvar_arena.alloc(TyVarBody::new("c"));
+            TypeScheme::forall(
+                [a, b, c],
+                Type::arrow(
+                    Type::arrow(Type::Var(a), Type::Var(b)),
+                    Type::arrow(
+                        Type::arrow(Type::Var(b), Type::Var(c)),
+                        Type::arrow(Type::Var(a), Type::Var(c)),
+                    ),
+                ),
+            )
+        };
+        self.def_func(
+            ".>",
+            type_scheam,
+            native_func!(_runner,
+                runner::obj::Object::Func(f) => {
+                    let f = f.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Func(g) => {
+                            Ok(Rc::new(runner::obj::Object::Func(
+                                f.clone().composition(g.clone())
+                            )))
+                        }
+                    )))
+                }
+            ),
+        );
 
-    def_func(".>", {
-        let a = tyvar_arena.alloc(TyVarBody::new("a"));
-        let b = tyvar_arena.alloc(TyVarBody::new("b"));
-        let c = tyvar_arena.alloc(TyVarBody::new("c"));
-        TypeScheme::forall(
-            [a, b, c],
-            Type::arrow(Type::arrow(Type::Var(a), Type::Var(b)),
+        let type_scheam = {
+            let tyvar_arena = self.inference_pool.tyvar_arena();
+            let a = tyvar_arena.alloc(TyVarBody::new("a"));
+            let b = tyvar_arena.alloc(TyVarBody::new("b"));
+            let c = tyvar_arena.alloc(TyVarBody::new("c"));
+            TypeScheme::forall(
+                [a, b, c],
                 Type::arrow(
                     Type::arrow(Type::Var(b), Type::Var(c)),
-                    Type::arrow(Type::Var(a), Type::Var(c))
-                )
+                    Type::arrow(
+                        Type::arrow(Type::Var(a), Type::Var(b)),
+                        Type::arrow(Type::Var(a), Type::Var(c)),
+                    ),
+                ),
             )
-        )
-    }, &mut funcs);
+        };
+        self.def_func(
+            "<.",
+            type_scheam,
+            native_func!(_runner,
+                runner::obj::Object::Func(g) => {
+                    let g = g.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::Func(f) => {
+                            Ok(Rc::new(runner::obj::Object::Func(
+                                f.clone().composition(g.clone())
+                            )))
+                        }
+                    )))
+                }
+            ),
+        );
 
-    def_func("<.", {
-        let a = tyvar_arena.alloc(TyVarBody::new("a"));
-        let b = tyvar_arena.alloc(TyVarBody::new("b"));
-        let c = tyvar_arena.alloc(TyVarBody::new("c"));
-        TypeScheme::forall(
-            [a, b, c],
-            Type::arrow(
-                Type::arrow(Type::Var(b), Type::Var(c)),
-                Type::arrow(
-                    Type::arrow(Type::Var(a), Type::Var(b)),
-                    Type::arrow(Type::Var(a), Type::Var(c))
-                )
-            )
-        )
-    }, &mut funcs);
-
-    def_func("|>", {
-        let a = tyvar_arena.alloc(TyVarBody::new("a"));
-        let b = tyvar_arena.alloc(TyVarBody::new("b"));
-        TypeScheme::forall(
-            [a, b],
-            Type::arrow(
-                Type::Var(a),
-                Type::arrow(
-                    Type::arrow(Type::Var(a), Type::Var(b)),
-                    Type::Var(b)
-                )
-            )
-        )
-    }, &mut funcs);
-
-    def_func("<|", {
-        let a = tyvar_arena.alloc(TyVarBody::new("a"));
-        let b = tyvar_arena.alloc(TyVarBody::new("b"));
-        TypeScheme::forall(
-            [a, b],
-            Type::arrow(
-                Type::arrow(Type::Var(a), Type::Var(b)),
+        let type_scheam = {
+            let tyvar_arena = self.inference_pool.tyvar_arena();
+            let a = tyvar_arena.alloc(TyVarBody::new("a"));
+            let b = tyvar_arena.alloc(TyVarBody::new("b"));
+            TypeScheme::forall(
+                [a, b],
                 Type::arrow(
                     Type::Var(a),
-                    Type::Var(b)
-                )
+                    Type::arrow(Type::arrow(Type::Var(a), Type::Var(b)), Type::Var(b)),
+                ),
             )
-        )
-    }, &mut funcs);
+        };
+        self.def_func(
+            "|>",
+            type_scheam,
+            native_func!(_runner,
+                arg => {
+                    let arg = arg.clone();
+                    Ok(Rc::new(
+                        native_func!(_runner,
+                            runner::obj::Object::Func(f) => {
+                                let result = _runner.call(&f, Rc::new(arg.clone()))?;
+                                Ok(result)
+                            }
+                        )
+                    ))
+                }
+            ),
+        );
 
-    def_func("map", {
-        let a = tyvar_arena.alloc(TyVarBody::new("a"));
-        let b = tyvar_arena.alloc(TyVarBody::new("b"));
-        TypeScheme::forall(
-            [a, b],
-            Type::arrow(
-                Type::arrow(Type::Var(a), Type::Var(b)),
+        let type_scheam = {
+            let tyvar_arena = self.inference_pool.tyvar_arena();
+            let a = tyvar_arena.alloc(TyVarBody::new("a"));
+            let b = tyvar_arena.alloc(TyVarBody::new("b"));
+            TypeScheme::forall(
+                [a, b],
                 Type::arrow(
-                    Type::list(Type::Var(a)),
-                    Type::list(Type::Var(b))
-                )
+                    Type::arrow(Type::Var(a), Type::Var(b)),
+                    Type::arrow(Type::Var(a), Type::Var(b)),
+                ),
             )
-        )
-    }, &mut funcs);
+        };
+        self.def_func(
+            "<|",
+            type_scheam,
+            native_func!(_runner,
+                runner::obj::Object::Func(f) => {
+                    let f = f.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        arg => {
+                            let result = _runner.call(&f, Rc::new(arg.clone()))?;
+                            Ok(result)
+                        }
+                    )))
+                }
+            ),
+        );
+    }
+    pub fn build(mut self) -> FxHashMap<VarId, (Rc<str>, TypeScheme, Rc<runner::obj::Object>)> {
+        self.def_operators();
+        self.def_func(
+            "show",
+            Type::arrow(Type::Int, Type::String),
+            native_func!(_runner,
+                runner::obj::Object::Int(n) => {
+                    Ok(Rc::new(runner::obj::Object::String(Rc::new(n.to_string()))))
+                }
+            ),
+        );
+        self.def_func(
+            "show",
+            Type::arrow(Type::Float, Type::String),
+            native_func!(_runner,
+                runner::obj::Object::Float(n) => {
+                    Ok(Rc::new(runner::obj::Object::String(Rc::new(n.to_string()))))
+                }
+            ),
+        );
+        self.def_func(
+            "show",
+            Type::arrow(Type::String, Type::String),
+            native_func!(_runner,
+                runner::obj::Object::String(s) => {
+                    Ok(Rc::new(runner::obj::Object::String(s.clone())))
+                }
+            ),
+        );
+        self.def_func(
+            "show",
+            Type::arrow(Type::Unit, Type::String),
+            native_func!(_runner,
+                runner::obj::Object::Unit => {
+                    Ok(Rc::new(runner::obj::Object::String(Rc::new("()".to_string()))))
+                }
+            ),
+        );
+        self.def_func(
+            "show",
+            Type::arrow(Type::Bool, Type::String),
+            native_func!(_runner,
+                runner::obj::Object::Bool(b) => {
+                    Ok(Rc::new(runner::obj::Object::String(Rc::new(b.to_string()))))
+                }
+            ),
+        );
+        let type_scheam = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            TypeScheme::forall([a], Type::arrow(Type::Var(a), Type::Var(a)))
+        };
+        self.def_func(
+            "id",
+            type_scheam,
+            native_func!(_runner,
+                arg => Ok(Rc::new(arg.clone()))
+            ),
+        );
 
-    def_func("filter", {
-        let a = tyvar_arena.alloc(TyVarBody::new("a"));
-        TypeScheme::forall(
-            [a],
-            Type::arrow(
-                Type::arrow(Type::Var(a), Type::Bool),
-                Type::arrow(
-                    Type::list(Type::Var(a)),
-                    Type::list(Type::Var(a))
-                )
-            )
-        )
-    }, &mut funcs);
+        self.def_func(
+            "print",
+            Type::arrow(Type::String, Type::Unit),
+            native_func!(_runner,
+                runner::obj::Object::String(s) => {
+                    println!("{}", s);
+                    Ok(Rc::new(runner::obj::Object::Unit))
+                }
+            ),
+        );
 
-    def_func(",", {
-        let a = tyvar_arena.alloc(TyVarBody::new("a"));
-        let b = tyvar_arena.alloc(TyVarBody::new("b"));
-        TypeScheme::forall(
-            [a, b],
-            Type::arrow(
-                Type::Var(a),
+        let type_scheam = {
+            let tyvar_arena = self.inference_pool.tyvar_arena();
+            let a = tyvar_arena.alloc(TyVarBody::new("a"));
+            let b = tyvar_arena.alloc(TyVarBody::new("b"));
+            TypeScheme::forall(
+                [a, b],
                 Type::arrow(
-                    Type::Var(b),
-                    Type::comma(Type::Var(a), Type::Var(b))
-                )
+                    Type::arrow(Type::Var(a), Type::Var(b)),
+                    Type::arrow(Type::list(Type::Var(a)), Type::list(Type::Var(b))),
+                ),
             )
-        )
-    }, &mut funcs);
-    funcs
+        };
+        self.def_func(
+            "map",
+            type_scheam,
+            native_func!(_runner,
+                runner::obj::Object::Func(f) => {
+                    let f = f.clone();
+                    Ok(Rc::new(native_func!(_runner,
+                        runner::obj::Object::List(elems) => {
+                            let mut new_elems = im_rc::Vector::new();
+                            for elem in elems.iter() {
+                                let mapped = _runner.call(&f, elem.clone())?;
+                                new_elems.push_back(mapped);
+                            }
+                            Ok(Rc::new(runner::obj::Object::List(new_elems)))
+                        }
+                    )))
+                }
+            ),
+        );
+
+        let type_scheam = {
+            let tyvar_arena = self.inference_pool.tyvar_arena();
+            let a = tyvar_arena.alloc(TyVarBody::new("a"));
+            TypeScheme::forall(
+                [a],
+                Type::arrow(
+                    Type::arrow(Type::Var(a), Type::Bool),
+                    Type::arrow(Type::list(Type::Var(a)), Type::list(Type::Var(a))),
+                ),
+            )
+        };
+        self.def_func("filter", type_scheam, native_func!(_runner,
+            runner::obj::Object::Func(f) => {
+                let f = f.clone();
+                Ok(Rc::new(native_func!(_runner,
+                    runner::obj::Object::List(elems) => {
+                        let mut new_elems = im_rc::Vector::new();
+                        for elem in elems.iter() {
+                            let pred = _runner.call(&f, elem.clone())?;
+                            if let runner::obj::Object::Bool(b) = *pred {
+                                if b {
+                                    new_elems.push_back(elem.clone());
+                                }
+                            } else {
+                                panic!("filter predicate must return a boolean");
+                            }
+                        }
+                        Ok(Rc::new(runner::obj::Object::List(new_elems)))
+                    }
+                )))
+            }
+        ));
+        let type_scheam = {
+            let tyvar_arena = self.inference_pool.tyvar_arena();
+            let a = tyvar_arena.alloc(TyVarBody::new("a"));
+            let b = tyvar_arena.alloc(TyVarBody::new("b"));
+            TypeScheme::forall(
+                [a, b],
+                Type::arrow(
+                    Type::Var(a),
+                    Type::arrow(Type::Var(b), Type::comma(Type::Var(a), Type::Var(b))),
+                ),
+            )
+        };
+        self.def_func(",", type_scheam, native_func!(_runner,
+            left => {
+                let left = left.clone();
+                Ok(Rc::new(native_func!(_runner,
+                    right => {
+                        let right = right.clone();
+                        Ok(Rc::new(runner::obj::Object::Comma(Rc::new(left.clone()), Rc::new(right.clone()))))
+                    }
+                )))
+            }
+        ));
+        self.funcs
+    }
 }

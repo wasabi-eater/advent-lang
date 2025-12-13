@@ -18,7 +18,7 @@ pub enum Object {
 #[derive(Clone)]
 pub enum Func {
     UserDefFunc(Rc<str>, Rc<Expr>),
-    StdFunc(Rc<dyn for<'a> Fn(&'a mut Runner, Rc<Object>) -> errors::Result<Rc<Object>>>),
+    NativeFunc(Rc<dyn for<'a> Fn(&'a mut Runner, Rc<Object>) -> errors::Result<Rc<Object>>>),
 }
 
 impl Debug for Object {
@@ -43,5 +43,14 @@ impl Debug for Object {
             }
             Object::Func(_) => write!(f, "Func(...)"),
         }
+    }
+}
+
+impl Func {
+    pub fn composition(self, g: Self) -> Self {
+        Self::NativeFunc(Rc::new(move |runner: &mut Runner, obj| {
+            let obj = runner.call(&self, obj)?;
+            runner.call(&g, obj)
+        }))
     }
 }

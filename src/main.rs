@@ -1,4 +1,4 @@
-use advent_lang::{analysis::inference::InferencePool, lexer, parser, runner::core::Runner};
+use advent_lang::{analysis::inference::InferencePool, lexer, parser, runner::core::Runner, std_lib::StdLibDefiner};
 use chumsky::Parser;
 use indoc::indoc;
 
@@ -16,10 +16,11 @@ fn main() {
     };
     println!("{ast:?}");
     let mut inference_pool = InferencePool::new();
+    let extern_funcs = StdLibDefiner::new(&mut inference_pool).build();
     let infered = inference_pool.infer(ast.clone()).unwrap();
     println!("infered: {}", inference_pool.display(infered));
     let program_data = inference_pool.create_program_data(ast.clone()).unwrap();
     println!("run!");
-    let mut runner = Runner::new(program_data);
-    println!("eval: {:?}", runner.eval(ast).unwrap());
+    let mut runner = Runner::new(program_data, extern_funcs);
+    println!("output: {:?}", runner.eval(ast).unwrap());
 }

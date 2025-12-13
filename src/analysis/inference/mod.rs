@@ -9,7 +9,6 @@ use crate::{
     analysis::{errors, types},
     ast::{self, Expr},
     lexer::Token,
-    std_lib::std_func_types
 };
 
 use super::types::*;
@@ -330,10 +329,11 @@ pub struct InferencePool {
     tmp_var_arena: TmpTyVarArena,
     expr_typing: FxHashMap<ExprRef, ExprTyping>,
     tyvar_arena: id_arena::Arena<TyVarBody>,
+    var_arena: id_arena::Arena<VarData>,
     scope: Scope,
     let_type: FxHashMap<ExprRef, VarType>,
     desugared: FxHashMap<ExprRef, Rc<Expr>>,
-    std_func_types: FxHashMap<Rc<str>, Vector<TypeScheme>>,
+    extern_funcs: FxHashMap<Rc<str>, Vector<(TypeScheme, VarId)>>,
 }
 #[derive(Default, Clone)]
 pub struct Scope {
@@ -347,28 +347,38 @@ enum VarType {
 
 impl InferencePool {
     pub fn new() -> Self {
-        let mut tyvar_arena = id_arena::Arena::new();
-        let std_func_types = std_func_types(&mut tyvar_arena);
-        let scope = Scope {
-            vars: std_func_types
-                .iter()
-                .map(|(name, ty)| {
-                    (
-                        name.clone(),
-                        ty.iter().cloned().map(VarType::Annotated).collect(),
-                    )
-                })
-                .collect(),
-        };
+        let tyvar_arena = id_arena::Arena::new();
+        let var_arena = id_arena::Arena::new();
         Self {
             tmp_var_arena: TmpTyVarArena::new(),
             expr_typing: FxHashMap::default(),
             tyvar_arena,
-            scope,
+            scope: Scope::default(),
             let_type: FxHashMap::default(),
             desugared: FxHashMap::default(),
-            std_func_types,
+            var_arena,
+            extern_funcs: FxHashMap::default(),
         }
+    }
+    pub fn extern_func(&mut self, name: impl Into<Rc<str>>, type_scheme: TypeScheme) -> VarId {
+        let name = name.into();
+        let var_id = self.var_arena.alloc(types::VarData {
+            name: name.clone(),
+            ty: type_scheme.clone(),
+        });
+        self.extern_funcs
+            .entry(name.clone())
+            .or_default()
+            .push_back((type_scheme.clone(), var_id));
+        self.scope
+            .vars
+            .entry(name)
+            .or_default()
+            .push_back(VarType::Annotated(type_scheme));
+        var_id
+    }
+    pub fn tyvar_arena(&mut self) -> &mut id_arena::Arena<TyVarBody> {
+        &mut self.tyvar_arena
     }
     pub fn display(&self, ty: Typing) -> String {
         let mut s = String::new();
@@ -581,32 +591,24 @@ impl InferencePool {
             })
             .collect::<errors::Result<FxHashMap<ExprRef, Rc<Type>>>>()?;
         let mut expr_var_id = FxHashMap::default();
-        let mut var_arena = id_arena::Arena::new();
         let mut new_scope = self
-            .std_func_types
+            .extern_funcs
             .iter()
             .map(|(name, tys)| {
                 (
                     name.clone(),
-                    tys.iter()
-                        .cloned()
-                        .map(|ty| {
-                            var_arena.alloc(types::VarData {
-                                name: name.clone(),
-                                ty,
-                            })
-                        })
-                        .collect(),
+                    tys.iter().cloned().map(|(_, var_id)| var_id).collect(),
                 )
             })
             .collect();
-        self.set_expr_var_id(expr, &mut expr_var_id, &mut new_scope, &mut var_arena)?;
+        self.set_expr_var_id(expr, &mut expr_var_id, &mut new_scope)?;
         Ok(ProgramData {
             tyvar_arena: self.tyvar_arena,
-            var_arena: var_arena,
+            var_arena: self.var_arena,
             expr_ty,
             expr_var_id,
             desugaered: self.desugared,
+            extern_funcs: self.extern_funcs,
         })
     }
     fn set_expr_var_id(
@@ -614,33 +616,32 @@ impl InferencePool {
         expr: Rc<Expr>,
         expr_var_id: &mut FxHashMap<ExprRef, types::VarId>,
         new_scope: &mut im_rc::HashMap<Rc<str>, Vector<types::VarId>, fxhash::FxBuildHasher>,
-        var_arena: &mut id_arena::Arena<types::VarData>,
     ) -> errors::Result<()> {
         if let Some(desugared) = self.desugared.get(&ExprRef(expr.clone())) {
-            return self.set_expr_var_id(desugared.clone(), expr_var_id, new_scope, var_arena);
+            return self.set_expr_var_id(desugared.clone(), expr_var_id, new_scope);
         }
         match &*expr {
             Expr::LitInt(_) | Expr::LitFloat(_) | Expr::LitStr(_) | Expr::Unit => Ok(()),
             Expr::LitList(items) => {
                 for item in items {
-                    self.set_expr_var_id(item.clone(), expr_var_id, new_scope, var_arena)?;
+                    self.set_expr_var_id(item.clone(), expr_var_id, new_scope)?;
                 }
                 Ok(())
             }
             Expr::BinOp(_, _, _) => unreachable!(),
             Expr::UnOp(Token::Apostrophe, r) => {
-                self.set_expr_var_id(r.clone(), expr_var_id, new_scope, var_arena)?;
+                self.set_expr_var_id(r.clone(), expr_var_id, new_scope)?;
                 Ok(())
             }
             Expr::UnOp(_, _) => unreachable!(),
             Expr::Member(_, _) => todo!(),
             Expr::AppFun(f, p) => {
-                self.set_expr_var_id(f.clone(), expr_var_id, new_scope, var_arena)?;
-                self.set_expr_var_id(p.clone(), expr_var_id, new_scope, var_arena)?;
+                self.set_expr_var_id(f.clone(), expr_var_id, new_scope)?;
+                self.set_expr_var_id(p.clone(), expr_var_id, new_scope)?;
                 Ok(())
             }
             Expr::Let(name, right_expr, _) => {
-                self.set_expr_var_id(right_expr.clone(), expr_var_id, new_scope, var_arena)?;
+                self.set_expr_var_id(right_expr.clone(), expr_var_id, new_scope)?;
                 let type_scheme = match self.let_type[&ExprRef(expr.clone())].clone() {
                     VarType::Annotated(annotation) => annotation,
                     VarType::Unannotated(typing) => TypeScheme {
@@ -648,7 +649,7 @@ impl InferencePool {
                         ty: Rc::new(typing.try_to_type(&mut self.tmp_var_arena)?),
                     },
                 };
-                let new_var_id = var_arena.alloc(types::VarData {
+                let new_var_id = self.var_arena.alloc(types::VarData {
                     name: name.clone(),
                     ty: type_scheme,
                 });
@@ -662,7 +663,7 @@ impl InferencePool {
             Expr::Brace(statements) => {
                 let out_scope = new_scope.clone();
                 for statement in statements {
-                    self.set_expr_var_id(statement.clone(), expr_var_id, new_scope, var_arena)?;
+                    self.set_expr_var_id(statement.clone(), expr_var_id, new_scope)?;
                 }
                 *new_scope = out_scope;
                 Ok(())
@@ -672,7 +673,7 @@ impl InferencePool {
                 let ty = typing.try_to_type(&mut self.tmp_var_arena)?;
                 let matched = new_scope[&*name]
                     .iter()
-                    .filter(|&&var_id| var_arena[var_id].ty.assume_subst(&ty).is_some())
+                    .filter(|&&var_id| self.var_arena[var_id].ty.assume_subst(&ty).is_some())
                     .collect_vec();
                 match matched.len() {
                     0 => Err(errors::Error::UndefiedIdent(name.clone())),

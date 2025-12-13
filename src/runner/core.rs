@@ -5,7 +5,7 @@ use fxhash::FxHashMap;
 use itertools::Itertools;
 
 use crate::{
-    analysis::types::{ExprRef, ProgramData, VarId},
+    analysis::types::{ExprRef, ProgramData, TypeScheme, VarId},
     ast::Expr,
     runner::obj::Func,
 };
@@ -35,12 +35,12 @@ impl Scope {
 }
 
 impl Runner {
-    pub fn new(program_data: ProgramData) -> Self {
+    pub fn new(program_data: ProgramData, extern_funcs: FxHashMap<VarId, (Rc<str>, TypeScheme, Rc<Object>)>) -> Self {
         Self {
             program_data,
             scope: Scope {
                 parent: None,
-                vars: FxHashMap::default(),
+                vars: extern_funcs.into_iter().map(|(var_id, (_, _, obj))| (var_id, obj)).collect(),
             },
         }
     }
@@ -91,9 +91,9 @@ impl Runner {
             Expr::Member(_, _) => todo!(),
         }
     }
-    fn call(&mut self, func: &Func, param: Rc<Object>) -> errors::Result<Rc<Object>> {
+    pub fn call(&mut self, func: &Func, param: Rc<Object>) -> errors::Result<Rc<Object>> {
         match func {
-            Func::StdFunc(inner) => inner(self, param),
+            Func::NativeFunc(inner) => inner(self, param),
             Func::UserDefFunc(_, _) => todo!(),
         }
     }

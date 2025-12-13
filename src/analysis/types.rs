@@ -152,6 +152,7 @@ pub struct ProgramData {
     pub expr_ty: FxHashMap<ExprRef, Rc<Type>>,
     pub expr_var_id: FxHashMap<ExprRef, VarId>,
     pub desugaered: FxHashMap<ExprRef, Rc<Expr>>,
+    pub extern_funcs: FxHashMap<Rc<str>, Vector<(TypeScheme, VarId)>>,
 }
 
 #[derive(Clone, Debug)]

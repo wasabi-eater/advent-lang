@@ -9,7 +9,7 @@ pub enum Token {
     Int(Rc<str>),
     #[regex(r"[0-9]+\.[0-9]+", |lex| Rc::from(lex.slice()))]
     Float(Rc<str>),
-    #[regex(r#""([^"\\\x00-\x1F]|\\(["\\bnfrt/]|u[a-fA-F0-9]{4}))*""#, |lex| Rc::from(lex.slice()))]
+    #[regex(r#""([^"\\\x00-\x1F]|\\(["\\bnfrt/]|u[a-fA-F0-9]{4}))*""#, |lex| Rc::from(&lex.slice()[1..lex.slice().len()-1]))]
     Str(Rc<str>),
     #[token("(")]
     ParenOpen,

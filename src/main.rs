@@ -1,11 +1,12 @@
-use advent_lang::{analysis::inference::InferencePool, lexer, parser, runner::core::Runner, std_lib::StdLibDefiner};
+use advent_lang::{
+    analysis::inference::InferencePool, lexer, parser, runner::core::Runner, std_lib::StdLibDefiner,
+};
 use chumsky::Parser;
 use indoc::indoc;
 
 fn main() {
     let src = indoc! {r#"
-    fuga = map id .> map show;
-    [0, 1, 2] |> fuga
+    f : Float -> String = show
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");

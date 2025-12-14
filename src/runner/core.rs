@@ -35,12 +35,18 @@ impl Scope {
 }
 
 impl Runner {
-    pub fn new(program_data: ProgramData, extern_funcs: FxHashMap<VarId, (Rc<str>, TypeScheme, Rc<Object>)>) -> Self {
+    pub fn new(
+        program_data: ProgramData,
+        extern_funcs: FxHashMap<VarId, (Rc<str>, TypeScheme, Rc<Object>)>,
+    ) -> Self {
         Self {
             program_data,
             scope: Scope {
                 parent: None,
-                vars: extern_funcs.into_iter().map(|(var_id, (_, _, obj))| (var_id, obj)).collect(),
+                vars: extern_funcs
+                    .into_iter()
+                    .map(|(var_id, (_, _, obj))| (var_id, obj))
+                    .collect(),
             },
         }
     }

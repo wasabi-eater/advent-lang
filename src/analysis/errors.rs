@@ -1,5 +1,5 @@
 use crate::{
-    analysis::inference::{TmpTyVarArena, TmpTyVarId, Typing},
+    analysis::inference::{TmpTyVarArena, TmpTyVarId, typing::Typing},
     ast::Expr,
 };
 use std::{fmt::Debug, rc::Rc};

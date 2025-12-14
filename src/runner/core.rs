@@ -5,7 +5,7 @@ use fxhash::FxHashMap;
 use itertools::Itertools;
 
 use crate::{
-    analysis::types::{ExprRef, ProgramData, TypeScheme, VarId},
+    analysis::{types::{TypeScheme}, program_data::{ExprRef, ProgramData, VarId}},
     ast::Expr,
     runner::obj::Func,
 };

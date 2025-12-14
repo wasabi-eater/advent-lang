@@ -1,7 +1,8 @@
 use crate::{
     analysis::{
         inference::InferencePool,
-        types::{TyVarBody, Type, TypeScheme, VarId},
+        types::{TyVarBody, Type, TypeScheme},
+        program_data::VarId
     },
     runner,
 };
@@ -311,7 +312,7 @@ impl<'a> StdLibDefiner<'a> {
                 }
             ),
         );
-        
+
         self.def_func(
             "show",
             Type::arrow(Type::Bool, Type::String),
@@ -360,7 +361,9 @@ impl<'a> StdLibDefiner<'a> {
                 }
             ),
         );
-        self.def_func("len", Type::arrow(Type::String, Type::Int),
+        self.def_func(
+            "len",
+            Type::arrow(Type::String, Type::Int),
             native_func!(_runner,
                 runner::obj::Object::String(s) => {
                     Ok(Rc::new(runner::obj::Object::Int(s.len() as i64)))
@@ -463,12 +466,11 @@ impl<'a> StdLibDefiner<'a> {
         );
         let type_scheam = {
             let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-            TypeScheme::forall(
-                [a],
-                Type::arrow(Type::list(Type::Var(a)), Type::Int),
-            )
+            TypeScheme::forall([a], Type::arrow(Type::list(Type::Var(a)), Type::Int))
         };
-        self.def_func("len", type_scheam,
+        self.def_func(
+            "len",
+            type_scheam,
             native_func!(_runner,
                 runner::obj::Object::List(elems) => {
                     Ok(Rc::new(runner::obj::Object::Int(elems.len() as i64)))
@@ -483,7 +485,10 @@ impl<'a> StdLibDefiner<'a> {
                 [a, b],
                 Type::arrow(
                     Type::list(Type::Var(a)),
-                    Type::arrow(Type::list(Type::Var(b)), Type::list(Type::comma(Type::Var(a), Type::Var(b)))),
+                    Type::arrow(
+                        Type::list(Type::Var(b)),
+                        Type::list(Type::comma(Type::Var(a), Type::Var(b))),
+                    ),
                 ),
             )
         };
@@ -697,34 +702,36 @@ impl<'a> StdLibDefiner<'a> {
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
             TypeScheme::forall(
                 [a, b],
-                Type::arrow(
-                    Type::comma(Type::Var(a), Type::Var(b)),
-                    Type::Var(a),
-                ),
+                Type::arrow(Type::comma(Type::Var(a), Type::Var(b)), Type::Var(a)),
             )
         };
-        self.def_func("fst", type_scheam, native_func!(_runner,
-            runner::obj::Object::Comma(left, _right) => {
-                Ok(left.clone())
-            }
-        ));
+        self.def_func(
+            "fst",
+            type_scheam,
+            native_func!(_runner,
+                runner::obj::Object::Comma(left, _right) => {
+                    Ok(left.clone())
+                }
+            ),
+        );
         let type_scheam = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
             TypeScheme::forall(
                 [a, b],
-                Type::arrow(
-                    Type::comma(Type::Var(a), Type::Var(b)),
-                    Type::Var(b),
-                ),
+                Type::arrow(Type::comma(Type::Var(a), Type::Var(b)), Type::Var(b)),
             )
         };
-        self.def_func("snd", type_scheam, native_func!(_runner,
-            runner::obj::Object::Comma(_left, right) => {
-                Ok(right.clone())
-            }
-        ));
+        self.def_func(
+            "snd",
+            type_scheam,
+            native_func!(_runner,
+                runner::obj::Object::Comma(_left, right) => {
+                    Ok(right.clone())
+                }
+            ),
+        );
     }
     pub fn def_io_functions(&mut self) {
         self.def_func(

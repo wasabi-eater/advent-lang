@@ -1,5 +1,5 @@
 use crate::{
-    analysis::inference::{TmpTyVarArena, TmpTyVarId, typing::Typing},
+    analysis::{inference::{TmpTyVarArena, TmpTyVarId, typing::Typing}},
     ast::Expr,
 };
 use std::{fmt::Debug, rc::Rc};
@@ -17,9 +17,8 @@ pub enum Error {
         arena: TmpTyVarArena,
     },
     AmbigiousOverload {
-        tys: Vec<Typing>,
-        tmp_id: TmpTyVarId,
-        arena: TmpTyVarArena,
+        name: Rc<str>,
+        candidates: Vec<Option<Rc<crate::analysis::types::Instance>>>,
     },
     IntegerOutOfSize(Rc<Expr>),
 }
@@ -30,13 +29,15 @@ impl Debug for Error {
         match self {
             Self::UndefiedIdent(name) => write!(f, "undefined ident: {name}!"),
             Self::UnknownType { tmp_id, .. } => write!(f, "{:?} is unspecified!", tmp_id),
-            Self::AmbigiousOverload { tys, tmp_id, arena } => {
-                write!(f, "overload unspecified of {tmp_id:?}: (")?;
-                for (i, ty) in tys.iter().enumerate() {
-                    if i == 0 {
-                        ty.display_with(arena, f)?;
-                    } else {
-                        ty.display_with(arena, f)?;
+            Self::AmbigiousOverload {name , candidates} => {
+                write!(f, "overload unspecified of {name}: (")?;
+                for (i, candidate) in candidates.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    match candidate {
+                        Some(instance) => write!(f, "{}({:?})", instance.class.name, instance.assigned_types)?,
+                        None => write!(f, "unknown")?,
                     }
                 }
                 write!(f, ")")

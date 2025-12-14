@@ -1,12 +1,11 @@
 use crate::{
     analysis::{
-        inference::InferencePool,
-        types::{TyVarBody, Type, TypeScheme},
-        program_data::VarId
+        inference::InferencePool, program_data::VarId, types::{Instance, TyVar, TyVarBody, Type, TypeClass, TypeScheme}
     },
     runner,
 };
 use fxhash::FxHashMap;
+use im_rc::HashMap;
 
 macro_rules! native_func {
     ($runner_ident:ident, $p:pat => $body:expr) => {
@@ -35,6 +34,26 @@ impl<'a> StdLibDefiner<'a> {
         };
         stdlib
     }
+    pub fn def_type_class(&mut self, type_class: Rc<TypeClass>) {
+        self.inference_pool.extern_type_class(type_class);
+    }
+    pub fn def_instance(
+        &mut self,
+        type_class: Rc<TypeClass>,
+        assigned_types: FxHashMap<TyVar, Type>,
+        method_bodys: &HashMap<&'static str, Rc<runner::obj::Object>>,
+    ) {
+        let instance = Rc::new(Instance {
+            class: type_class.clone(),
+            assigned_types,
+        });
+        let methods = self.inference_pool.extern_instance(instance.clone());
+        for (name, var_id) in methods {
+            let type_scheme = type_class.methods.get(&*name).unwrap().subst(&instance.assigned_types);
+            let method_body = method_bodys.get(name.as_ref()).unwrap().clone();
+            self.funcs.insert(var_id, (name, type_scheme, method_body));
+        }
+    }
     pub fn def_func(
         &mut self,
         name: impl Into<Rc<str>>,
@@ -50,352 +69,770 @@ impl<'a> StdLibDefiner<'a> {
         self.funcs
             .insert(var_id, (name, type_scheme.into(), obj.into()));
     }
-    fn def_int_functions(&mut self) {
-        self.def_func(
-            "+",
-            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
-            native_func!(_runner,
-                runner::obj::Object::Int(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Int(b) => {
-                            Ok(Rc::new(runner::obj::Object::Int(a + b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "-",
-            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
-            native_func!(_runner,
-                runner::obj::Object::Int(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Int(b) => {
-                            Ok(Rc::new(runner::obj::Object::Int(a - b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "*",
-            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
-            native_func!(_runner,
-                runner::obj::Object::Int(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Int(b) => {
-                            Ok(Rc::new(runner::obj::Object::Int(a * b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "/",
-            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
-            native_func!(_runner,
-                runner::obj::Object::Int(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Int(b) => {
-                            Ok(Rc::new(runner::obj::Object::Int(a / b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "==",
-            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Bool)),
-            native_func!(_runner,
-                runner::obj::Object::Int(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Int(b) => {
-                            Ok(Rc::new(runner::obj::Object::Bool(a == *b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "-_",
-            Type::arrow(Type::Int, Type::Int),
-            native_func!(_runner,
-                runner::obj::Object::Int(a) => Ok(Rc::new(runner::obj::Object::Int(-a)))
-            ),
-        );
-        self.def_func(
-            "!_",
-            Type::arrow(Type::Int, Type::Int),
-            native_func!(_runner,
-                runner::obj::Object::Int(a) => Ok(Rc::new(runner::obj::Object::Int(!a)))
-            ),
-        );
-        self.def_func(
-            "&",
-            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
-            native_func!(_runner,
-                runner::obj::Object::Int(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Int(b) => {
-                            Ok(Rc::new(runner::obj::Object::Int(a & *b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "|",
-            Type::arrow(Type::Int, Type::arrow(Type::Int, Type::Int)),
-            native_func!(_runner,
-                runner::obj::Object::Int(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Int(b) => {
-                            Ok(Rc::new(runner::obj::Object::Int(a | b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "show",
-            Type::arrow(Type::Int, Type::String),
-            native_func!(_runner,
-                runner::obj::Object::Int(n) => {
-                    Ok(Rc::new(runner::obj::Object::String(Rc::new(n.to_string()))))
-                }
-            ),
-        );
-    }
-    fn def_float_functions(&mut self) {
-        self.def_func(
-            "+",
-            Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)),
-            native_func!(_runner,
-                runner::obj::Object::Float(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Float(b) => {
-                            Ok(Rc::new(runner::obj::Object::Float(a + b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "-",
-            Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)),
-            native_func!(_runner,
-                runner::obj::Object::Float(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Float(b) => {
-                            Ok(Rc::new(runner::obj::Object::Float(a - b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "*",
-            Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)),
-            native_func!(_runner,
-                runner::obj::Object::Float(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Float(b) => {
-                            Ok(Rc::new(runner::obj::Object::Float(a * b)))
-                        }
-                    )))
-                }
-            ),
+    fn def_show_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let show_class = Rc::new(TypeClass{
+            name: "Show".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "show".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(Type::Var(a), Type::String),
+                    ),
+                )       
+            ]),
+        });
+        self.def_type_class(show_class.clone());
+
+        // Show for Int
+        self.def_instance(
+            show_class.clone(),
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "show",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(n) => {
+                        Ok(Rc::new(runner::obj::Object::String(Rc::new(n.to_string()))))
+                    }
+                )),
+            )]),
         );
 
-        self.def_func(
-            "/",
-            Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Float)),
-            native_func!(_runner,
-                runner::obj::Object::Float(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Float(b) => {
-                            Ok(Rc::new(runner::obj::Object::Float(a / b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "==",
-            Type::arrow(Type::Float, Type::arrow(Type::Float, Type::Bool)),
-            native_func!(_runner,
-                runner::obj::Object::Float(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Float(b) => {
-                            Ok(Rc::new(runner::obj::Object::Bool(a == *b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "-_",
-            Type::arrow(Type::Float, Type::Float),
-            native_func!(_runner,
-                runner::obj::Object::Float(a) => Ok(Rc::new(runner::obj::Object::Float(-a)))
-            ),
-        );
-        self.def_func(
-            "show",
-            Type::arrow(Type::Float, Type::String),
-            native_func!(_runner,
-                runner::obj::Object::Float(n) => {
-                    Ok(Rc::new(runner::obj::Object::String(Rc::new(n.to_string()))))
-                }
-            ),
-        );
-    }
-    fn def_bool_functions(&mut self) {
-        self.def_func(
-            "==",
-            Type::arrow(Type::Bool, Type::arrow(Type::Bool, Type::Bool)),
-            native_func!(_runner,
-                runner::obj::Object::Bool(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Bool(b) => {
-                            Ok(Rc::new(runner::obj::Object::Bool(a == *b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "!_",
-            Type::arrow(Type::Bool, Type::Bool),
-            native_func!(_runner,
-                runner::obj::Object::Bool(a) => Ok(Rc::new(runner::obj::Object::Bool(!a)))
-            ),
-        );
-        self.def_func(
-            "&",
-            Type::arrow(Type::Bool, Type::arrow(Type::Bool, Type::Bool)),
-            native_func!(_runner,
-                runner::obj::Object::Bool(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Bool(b) => {
-                            Ok(Rc::new(runner::obj::Object::Bool(a & b)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "|",
-            Type::arrow(Type::Bool, Type::arrow(Type::Bool, Type::Bool)),
-            native_func!(_runner,
-                runner::obj::Object::Bool(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Bool(b) => {
-                            Ok(Rc::new(runner::obj::Object::Bool(a | b)))
-                        }
-                    )))
-                }
-            ),
+        //Show for Float
+        self.def_instance(
+            show_class.clone(),
+            FxHashMap::from_iter([(a, Type::Float)]),
+            &HashMap::from_iter([(
+                "show",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Float(n) => {
+                        Ok(Rc::new(runner::obj::Object::String(Rc::new(n.to_string()))))
+                    }
+                )),
+            )]),
         );
 
-        self.def_func(
-            "show",
-            Type::arrow(Type::Bool, Type::String),
-            native_func!(_runner,
-                runner::obj::Object::Bool(b) => {
-                    Ok(Rc::new(runner::obj::Object::String(Rc::new(b.to_string()))))
-                }
-            ),
+        //Show for Bool
+        self.def_instance(
+            show_class.clone(),
+            FxHashMap::from_iter([(a, Type::Bool)]),
+            &HashMap::from_iter([(
+                "show",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Bool(b) => {
+                        Ok(Rc::new(runner::obj::Object::String(Rc::new(b.to_string()))))
+                    }
+                )),
+            )]),
+        );
+
+        // Show for String
+        self.def_instance(
+            show_class.clone(),
+            FxHashMap::from_iter([(a, Type::String)]),
+            &HashMap::from_iter([(
+                "show",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::String(s) => {
+                        Ok(Rc::new(runner::obj::Object::String(s.clone())))
+                    }
+                )),
+            )]),
+        );
+
+        // Show for Unit
+        self.def_instance(
+            show_class,
+            FxHashMap::from_iter([(a, Type::Unit)]),
+            &HashMap::from_iter([(
+                "show",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Unit => {
+                        Ok(Rc::new(runner::obj::Object::String(Rc::new("()".to_string()))))
+                    }
+                )),
+            )]),
         );
     }
-    fn def_str_functions(&mut self) {
-        self.def_func(
-            "+",
-            Type::arrow(Type::String, Type::arrow(Type::String, Type::String)),
-            native_func!(_runner,
-                runner::obj::Object::String(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::String(b) => {
-                            Ok(Rc::new(runner::obj::Object::String(Rc::new(format!("{}{}", a, b)))))
-                        }
-                    )))
-                }
-            ),
+    fn def_add_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let add_class = Rc::new(TypeClass{
+            name: "Add".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "+".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::arrow(Type::Var(a), Type::Var(a)),
+                        ),
+                    ),
+                )       
+            ]),
+        });
+
+        // Add for Int
+        self.def_instance(
+            add_class.clone(),
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "+",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Int(y) => {
+                                Ok(Rc::new(runner::obj::Object::Int(x + y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
         );
-        self.def_func(
-            "==",
-            Type::arrow(Type::String, Type::arrow(Type::String, Type::Bool)),
-            native_func!(_runner,
-                runner::obj::Object::String(a) => {
-                    let a = a.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::String(b) => {
-                            Ok(Rc::new(runner::obj::Object::Bool(a == *b)))
-                        }
-                    )))
-                }
-            ),
+
+        // Add for Float
+        self.def_instance(
+            add_class.clone(),
+            FxHashMap::from_iter([(a, Type::Float)]),
+            &HashMap::from_iter([(
+                "+",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Float(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Float(y) => {
+                                Ok(Rc::new(runner::obj::Object::Float(x + y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
         );
-        self.def_func(
-            "show",
-            Type::arrow(Type::String, Type::String),
-            native_func!(_runner,
-                runner::obj::Object::String(s) => {
-                    Ok(Rc::new(runner::obj::Object::String(s.clone())))
-                }
-            ),
+
+        // Add for String
+        self.def_instance(
+            add_class.clone(),
+            FxHashMap::from_iter([(a, Type::String)]),
+            &HashMap::from_iter([(
+                "+",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::String(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::String(y) => {
+                                Ok(Rc::new(runner::obj::Object::String(Rc::new(format!("{}{}", x, y)))))
+                            }
+                        )))
+                    }
+                )),
+            )]),
         );
-        self.def_func(
-            "len",
-            Type::arrow(Type::String, Type::Int),
-            native_func!(_runner,
-                runner::obj::Object::String(s) => {
-                    Ok(Rc::new(runner::obj::Object::Int(s.len() as i64)))
-                }
-            ),
+
+        // Add for List
+        let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("c"));
+        self.def_instance(
+            add_class,
+            FxHashMap::from_iter([
+                (a, Type::List(Rc::new(Type::Var(b)))),
+            ]),
+            &HashMap::from_iter([(
+                "+",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::List(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::List(y) => {
+                                let mut x = x.clone();
+                                x.append(y.clone());
+                                Ok(Rc::new(runner::obj::Object::List(x)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+    }
+    fn def_sub_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let sub_class = Rc::new(TypeClass{
+            name: "Sub".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "-".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::arrow(Type::Var(a), Type::Var(a)),
+                        ),
+                    ),
+                )       
+            ]),
+        });
+
+        // Sub for Int
+        self.def_instance(
+            sub_class.clone(),
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "-",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Int(y) => {
+                                Ok(Rc::new(runner::obj::Object::Int(x - y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+
+        // Sub for Float
+        self.def_instance(
+            sub_class,
+            FxHashMap::from_iter([(a, Type::Float)]),
+            &HashMap::from_iter([(
+                "-",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Float(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Float(y) => {
+                                Ok(Rc::new(runner::obj::Object::Float(x - y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+    }
+    fn def_mul_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let mul_class = Rc::new(TypeClass{
+            name: "Mul".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "*".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::arrow(Type::Var(a), Type::Var(a)),
+                        ),
+                    ),
+                )       
+            ]),
+        });
+        // Mul for Int
+        self.def_instance(
+            mul_class.clone(),
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "*",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Int(y) => {
+                                Ok(Rc::new(runner::obj::Object::Int(x * y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+        // Mul for Float
+        self.def_instance(
+            mul_class,
+            FxHashMap::from_iter([(a, Type::Float)]),
+            &HashMap::from_iter([(
+                "*",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Float(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Float(y) => {
+                                Ok(Rc::new(runner::obj::Object::Float(x * y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+    }
+    fn def_div_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let div_class = Rc::new(TypeClass{
+            name: "Div".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "/".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::arrow(Type::Var(a), Type::Var(a)),
+                        ),
+                    ),
+                )       
+            ]),
+        });
+        // Div for Int
+        self.def_instance(
+            div_class.clone(),
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "/",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Int(y) => {
+                                Ok(Rc::new(runner::obj::Object::Int(x / y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+        // Div for Float
+        self.def_instance(
+            div_class,
+            FxHashMap::from_iter([(a, Type::Float)]),
+            &HashMap::from_iter([(
+                "/",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Float(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Float(y) => {
+                                Ok(Rc::new(runner::obj::Object::Float(x / y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+    }
+    fn def_mod_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let mod_class = Rc::new(TypeClass{
+            name: "Mod".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "%".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::arrow(Type::Var(a), Type::Var(a)),
+                        ),
+                    ),
+                )       
+            ]),
+        });
+        // Mod for Int
+        self.def_instance(
+            mod_class.clone(),
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "%",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Int(y) => {
+                                Ok(Rc::new(runner::obj::Object::Int(x % y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+        // Mod for Float
+        self.def_instance(
+            mod_class,
+            FxHashMap::from_iter([(a, Type::Float)]),
+            &HashMap::from_iter([(
+                "%",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Float(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Float(y) => {
+                                Ok(Rc::new(runner::obj::Object::Float(x % y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+    }
+    fn def_neg_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let neg_class = Rc::new(TypeClass{
+            name: "Neg".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "-_".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::Var(a),
+                        ),
+                    ),
+                )       
+            ]),
+        });
+        // Neg for Int
+        self.def_instance(
+            neg_class.clone(),
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "-_",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(x) => {
+                        Ok(Rc::new(runner::obj::Object::Int(-x)))
+                    }
+                )),
+            )]),
+        );
+        // Neg for Float
+        self.def_instance(
+            neg_class,
+            FxHashMap::from_iter([(a, Type::Float)]),
+            &HashMap::from_iter([(
+                "-_",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Float(x) => {
+                        Ok(Rc::new(runner::obj::Object::Float(-x)))
+                    }
+                )),
+            )]),
+        );
+    }
+    fn def_not_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let not_class = Rc::new(TypeClass{
+            name: "Not".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "!_".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::Var(a),
+                        ),
+                    ),
+                )       
+            ]),
+        });
+        // Not for Bool
+        self.def_instance(
+            not_class.clone(),
+            FxHashMap::from_iter([(a, Type::Bool)]),
+            &HashMap::from_iter([(
+                "!_",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Bool(b) => {
+                        Ok(Rc::new(runner::obj::Object::Bool(!b)))
+                    }
+                )),
+            )]),
+        );
+        // Not for Int
+        self.def_instance(
+            not_class,
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "!_",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(x) => {
+                        Ok(Rc::new(runner::obj::Object::Int(!x)))
+                    }
+                )),
+            )]),
+        );
+    }
+    fn def_and_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let and_class = Rc::new(TypeClass{
+            name: "And".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "&".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::arrow(Type::Var(a), Type::Var(a)),
+                        ),
+                    ),
+                )       
+            ]),
+        });
+        // And for Bool
+        self.def_instance(
+            and_class.clone(),
+            FxHashMap::from_iter([(a, Type::Bool)]),
+            &HashMap::from_iter([(
+                "&",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Bool(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Bool(y) => {
+                                Ok(Rc::new(runner::obj::Object::Bool(x & y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+        // And for Int
+        self.def_instance(
+            and_class,
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "&",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Int(y) => {
+                                Ok(Rc::new(runner::obj::Object::Int(x & y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+    }
+    fn def_or_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let or_class = Rc::new(TypeClass{
+            name: "Or".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "|".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::arrow(Type::Var(a), Type::Var(a)),
+                        ),
+                    ),
+                )       
+            ]),
+        });
+        // Or for Bool
+        self.def_instance(
+            or_class.clone(),
+            FxHashMap::from_iter([(a, Type::Bool)]),
+            &HashMap::from_iter([(
+                "|",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Bool(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Bool(y) => {
+                                Ok(Rc::new(runner::obj::Object::Bool(x | y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+        // Or for Int
+        self.def_instance(
+            or_class,
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "|",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Int(y) => {
+                                Ok(Rc::new(runner::obj::Object::Int(x | y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+    }
+    fn def_eq_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let eq_class = Rc::new(TypeClass{
+            name: "Eq".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "==".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::arrow(Type::Var(a), Type::Bool),
+                        ),
+                    ),
+                )       
+            ]),
+        });
+        // Eq for Int
+        self.def_instance(
+            eq_class.clone(),
+            FxHashMap::from_iter([(a, Type::Int)]),
+            &HashMap::from_iter([(
+                "==",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Int(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Int(y) => {
+                                Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+        // Eq for Float
+        self.def_instance(
+            eq_class.clone(),
+            FxHashMap::from_iter([(a, Type::Float)]),
+            &HashMap::from_iter([(
+                "==",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Float(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Float(y) => {
+                                Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
+                            }
+                        )))
+                    }
+                ))
+            )]),
+        );
+        //Eq for Bool
+        self.def_instance(
+            eq_class.clone(),
+            FxHashMap::from_iter([(a, Type::Bool)]),
+            &HashMap::from_iter([(
+                "==",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Bool(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Bool(y) => {
+                                Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+        //Eq for String
+        self.def_instance(
+            eq_class.clone(),
+            FxHashMap::from_iter([(a, Type::String)]),
+            &HashMap::from_iter([(
+                "==",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::String(x) => {
+                        let x = x.clone();
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::String(y) => {
+                                Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+        //Eq for Unit
+        self.def_instance(
+            eq_class,
+            FxHashMap::from_iter([(a, Type::Unit)]),
+            &HashMap::from_iter([(
+                "==",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::Unit => {
+                        Ok(Rc::new(native_func!(_runner,
+                            runner::obj::Object::Unit => {
+                                Ok(Rc::new(runner::obj::Object::Bool(true)))
+                            }
+                        )))
+                    }
+                )),
+            )]),
+        );
+    }
+    fn def_len_class(&mut self) {
+        let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+        let len_class = Rc::new(TypeClass{
+            name: "Len".into(),
+            bound_vars: im_rc::vector![a],
+            methods: FxHashMap::from_iter([
+                (
+                    "len".into(),
+                    TypeScheme::forall(
+                        [a],
+                        Type::arrow(
+                            Type::Var(a),
+                            Type::Int,
+                        ),
+                    ),
+                )       
+            ]),
+        });
+        // Len for String
+        self.def_instance(
+            len_class.clone(),
+            FxHashMap::from_iter([(a, Type::String)]),
+            &HashMap::from_iter([(
+                "len",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::String(s) => {
+                        Ok(Rc::new(runner::obj::Object::Int(s.len() as i64)))
+                    }
+                )),
+            )]),
+        );
+        // Len for List
+        let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+        self.def_instance(
+            len_class,
+            FxHashMap::from_iter([(a, Type::list(Type::Var(b)))]),
+            &HashMap::from_iter([(
+                "len",
+                Rc::new(native_func!(_runner,
+                    runner::obj::Object::List(elems) => {
+                        Ok(Rc::new(runner::obj::Object::Int(elems.len() as i64)))
+                    }
+                )),
+            )]),
         );
     }
     fn def_list_functions(&mut self) {
-        let type_scheam = {
-            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-            TypeScheme::forall(
-                [a],
-                Type::arrow(Type::list(Type::Var(a)), Type::list(Type::Var(a))),
-            )
-        };
-        self.def_func(
-            "+",
-            type_scheam,
-            native_func!(_runner,
-                runner::obj::Object::List(elems) => {
-                    let elems = elems.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::List(elems2) => {
-                            let mut new_elems = elems.clone();
-                            new_elems.extend(elems2.iter().cloned());
-                            Ok(Rc::new(runner::obj::Object::List(new_elems)))
-                        }
-                    )))
-                }
-            ),
-        );
-
         let type_scheam = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
@@ -465,19 +902,6 @@ impl<'a> StdLibDefiner<'a> {
             ),
         );
         let type_scheam = {
-            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-            TypeScheme::forall([a], Type::arrow(Type::list(Type::Var(a)), Type::Int))
-        };
-        self.def_func(
-            "len",
-            type_scheam,
-            native_func!(_runner,
-                runner::obj::Object::List(elems) => {
-                    Ok(Rc::new(runner::obj::Object::Int(elems.len() as i64)))
-                }
-            ),
-        );
-        let type_scheam = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
@@ -509,30 +933,6 @@ impl<'a> StdLibDefiner<'a> {
                             Ok(Rc::new(runner::obj::Object::List(new_elems)))
                         }
                     )))
-                }
-            ),
-        );
-    }
-    fn def_unit_functions(&mut self) {
-        self.def_func(
-            "==",
-            Type::arrow(Type::Unit, Type::arrow(Type::Unit, Type::Bool)),
-            native_func!(_runner,
-                runner::obj::Object::Unit => {
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Unit => {
-                            Ok(Rc::new(runner::obj::Object::Bool(true)))
-                        }
-                    )))
-                }
-            ),
-        );
-        self.def_func(
-            "show",
-            Type::arrow(Type::Unit, Type::String),
-            native_func!(_runner,
-                runner::obj::Object::Unit => {
-                    Ok(Rc::new(runner::obj::Object::String(Rc::new("()".to_string()))))
                 }
             ),
         );
@@ -746,12 +1146,19 @@ impl<'a> StdLibDefiner<'a> {
         );
     }
     pub fn build(mut self) -> FxHashMap<VarId, (Rc<str>, TypeScheme, Rc<runner::obj::Object>)> {
-        self.def_int_functions();
-        self.def_float_functions();
-        self.def_bool_functions();
-        self.def_str_functions();
+        self.def_add_class();
+        self.def_sub_class();
+        self.def_mul_class();
+        self.def_div_class();
+        self.def_mod_class();
+        self.def_neg_class();
+        self.def_not_class();
+        self.def_and_class();
+        self.def_or_class();
+        self.def_eq_class();
+        self.def_len_class();
+        self.def_show_class();
         self.def_list_functions();
-        self.def_unit_functions();
         self.def_func_functions();
         self.def_comma_functions();
         self.def_io_functions();

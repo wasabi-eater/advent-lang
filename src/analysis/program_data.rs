@@ -1,5 +1,5 @@
 use std::{rc::Rc, hash::Hash};
-use super::types::{Type, TypeScheme, TyVarBody};
+use super::types::{Type, TypeScheme, TyVarBody, Instance};
 use fxhash::FxHashMap;
 use im_rc::Vector;
 use crate::ast::Expr;
@@ -15,7 +15,7 @@ pub struct ProgramData {
     pub expr_ty: FxHashMap<ExprRef, Rc<Type>>,
     pub expr_var_id: FxHashMap<ExprRef, VarId>,
     pub desugaered: FxHashMap<ExprRef, Rc<Expr>>,
-    pub extern_funcs: FxHashMap<Rc<str>, Vector<(TypeScheme, VarId)>>,
+    pub extern_funcs: FxHashMap<Rc<str>, Vector<(TypeScheme, VarId, Option<Rc<Instance>>)>>, // name -> (type_scheme, var_id, instance)
 }
 
 #[derive(Clone, Debug)]

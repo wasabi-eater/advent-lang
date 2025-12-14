@@ -24,10 +24,10 @@ pub enum Func {
 impl Debug for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Object::Int(n) => write!(f, "Int({n})"),
-            Object::Float(n) => write!(f, "Float({n})"),
-            Object::String(s) => write!(f, "String({s})"),
-            Object::Bool(b) => write!(f, "Bool({b})"),
+            Object::Int(n) => write!(f, "{n}"),
+            Object::Float(n) => write!(f, "{n}f"),
+            Object::String(s) => write!(f, "\"{}\"", s.escape_debug()),
+            Object::Bool(b) => write!(f, "{b}"),
             Object::Unit => write!(f, "()"),
             Object::Comma(l, r) => write!(f, "({l:?}, {r:?})"),
             Object::List(elems) => {

@@ -6,7 +6,7 @@ use indoc::indoc;
 
 fn main() {
     let src = indoc! {r#"
-    (map show) [1.2, 2.2, 3.2]
+    zip [0, 2, 4] ["a", "b", "c"] |> map fst
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");
@@ -23,5 +23,5 @@ fn main() {
     let program_data = inference_pool.create_program_data(ast.clone()).unwrap();
     println!("run!");
     let mut runner = Runner::new(program_data, extern_funcs);
-    println!("output: {:?}", runner.eval(ast).unwrap());
+    println!("{:?}", runner.eval(ast).unwrap());
 }

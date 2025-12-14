@@ -88,16 +88,8 @@ impl Typing {
                 f.write_str("]")
             }
             Typing::TmpTyVar(tmp) => {
-                if let Some(tys) = arena.take(*tmp) {
-                    for (i, ty) in tys.iter().enumerate() {
-                        if i == 0 {
-                            ty.display_with(arena, f)?;
-                        } else {
-                            f.write_str(" | ")?;
-                            ty.display_with(arena, f)?;
-                        }
-                    }
-                    Ok(())
+                if let Some(ty) = arena.take(*tmp) {
+                    ty.display_with(arena, f)
                 } else {
                     write!(f, "{tmp:?}")
                 }

@@ -4,12 +4,12 @@ pub mod typing;
 
 use fxhash::FxHashMap;
 use im_rc::{Vector, vector};
-use itertools::{Itertools, iproduct};
+use itertools::Itertools;
 
 use super::types::*;
 use super::program_data::*;
 use crate::{
-    analysis::{errors, types},
+    analysis::errors,
     ast::{self, Expr},
     lexer::Token,
 };
@@ -32,7 +32,7 @@ impl Debug for TmpTyVarId {
 #[derive(Clone)]
 pub struct TmpTyVarArena {
     tmp_ty_vars: RefCell<Vec<TmpTyVar>>,
-    group_ty: FxHashMap<TmpTyVarId, Vec<Typing>>,
+    group_ty: FxHashMap<TmpTyVarId, Typing>,
 }
 impl TmpTyVarArena {
     pub fn new() -> Self {
@@ -52,35 +52,24 @@ impl TmpTyVarArena {
             }
         }
     }
-    pub fn take(&self, id: TmpTyVarId) -> Option<&[Typing]> {
+    pub fn take(&self, id: TmpTyVarId) -> Option<&Typing> {
         let root = self.root(id);
-        self.group_ty.get(&root).map(|tys| &**tys)
+        self.group_ty.get(&root)
     }
     pub fn take_or_err(&mut self, id: TmpTyVarId) -> errors::Result<Typing> {
-        let Some(tys) = self.take(id) else {
+        let Some(ty) = self.take(id) else {
             return Err(errors::Error::UnknownType {
                 tmp_id: id,
                 arena: self.clone(),
             });
         };
-        if tys.len() == 1 {
-            Ok(tys[0].clone())
-        } else {
-            Err(errors::Error::AmbigiousOverload {
-                tys: tys.iter().map(|pair| pair.clone()).collect(),
-                tmp_id: id,
-                arena: self.clone(),
-            })
-        }
-    }
-    fn alloc_assigned_many(&mut self, typings: Vec<Typing>) -> TmpTyVarId {
-        let id = TmpTyVarId(self.tmp_ty_vars.borrow().len());
-        self.tmp_ty_vars.get_mut().push(TmpTyVar::Root { size: 1 });
-        self.group_ty.insert(id, typings);
-        id
+        Ok(ty.clone())
     }
     fn alloc_assigned(&mut self, typing: Typing) -> TmpTyVarId {
-        self.alloc_assigned_many(vec![typing])
+        let id = TmpTyVarId(self.tmp_ty_vars.borrow().len());
+        self.tmp_ty_vars.get_mut().push(TmpTyVar::Root { size: 1 });
+        self.group_ty.insert(id, typing);
+        id
     }
     fn alloc_unassigned(&mut self) -> TmpTyVarId {
         let id = TmpTyVarId(self.tmp_ty_vars.borrow().len());
@@ -90,7 +79,7 @@ impl TmpTyVarArena {
     pub fn is_same_group(&mut self, l: TmpTyVarId, r: TmpTyVarId) -> bool {
         self.root(l) == self.root(r)
     }
-    fn merge(&mut self, l: TmpTyVarId, r: TmpTyVarId, new_ty: Option<Vec<Typing>>) {
+    fn merge(&mut self, l: TmpTyVarId, r: TmpTyVarId, new_ty: Option<Typing>) {
         let l = self.root(l);
         let r = self.root(r);
         if l == r {
@@ -177,27 +166,16 @@ fn unify_tmp_var_id(
 ) -> errors::Result<()> {
     match (arena.take(l), arena.take(r)) {
         (None, r_ty) => {
-            let r_ty = r_ty.map(|tys| tys.to_vec());
-            arena.merge(l, r, r_ty);
+            arena.merge(l, r, r_ty.cloned());
             Ok(())
         }
         (l_ty, None) => {
-            let l_ty = l_ty.map(|tys| tys.to_vec());
-            arena.merge(l, r, l_ty);
+            arena.merge(l, r, l_ty.cloned());
             Ok(())
         }
         (Some(l_ty), Some(r_ty)) => {
-            let unified_types = iproduct!(l_ty.to_vec(), r_ty.to_vec())
-                .map(|(l_ty, r_ty)| unify(&l_ty, &r_ty, arena, expr.clone()))
-                .collect_vec();
-            if unified_types.is_empty() {
-                panic!()
-            }
-            if unified_types.iter().all(|res| res.is_err()) {
-                return Err(unified_types.into_iter().next().unwrap().unwrap_err());
-            }
-            let unified_types = unified_types.into_iter().flatten().collect_vec();
-            arena.merge(l, r, Some(unified_types));
+            let unified_type = unify(&l_ty.clone(), &r_ty.clone(), arena, expr.clone())?;
+            arena.merge(l, r, Some(unified_type));
             Ok(())
         }
     }
@@ -214,11 +192,14 @@ pub struct InferencePool {
     scope: Scope,
     let_type: FxHashMap<ExprRef, VarType>,
     desugared: FxHashMap<ExprRef, Rc<Expr>>,
-    extern_funcs: FxHashMap<Rc<str>, Vector<(TypeScheme, VarId)>>,
+    extern_funcs: FxHashMap<Rc<str>, Vector<(TypeScheme, VarId, Option<Rc<Instance>>)>>,
 }
 #[derive(Default, Clone)]
 pub struct Scope {
-    vars: im_rc::HashMap<Rc<str>, Vector<VarType>, fxhash::FxBuildHasher>,
+    vars: im_rc::HashMap<Rc<str>, VarType, fxhash::FxBuildHasher>,
+    type_classes: im_rc::HashMap<Rc<str>, Rc<TypeClass>, fxhash::FxBuildHasher>,
+    method_classes: im_rc::HashMap<Rc<str>, Rc<TypeClass>, fxhash::FxBuildHasher>,
+    instances: im_rc::HashMap<TypeClassRef, Vector<Rc<Instance>>, fxhash::FxBuildHasher>,
 }
 #[derive(Clone)]
 enum VarType {
@@ -241,6 +222,37 @@ impl InferencePool {
             extern_funcs: FxHashMap::default(),
         }
     }
+    pub fn extern_type_class(&mut self, type_class: Rc<TypeClass>) {
+        for method_name in type_class.methods.keys() {
+            self.scope
+                .method_classes
+                .insert(method_name.clone(), type_class.clone());
+        }
+        self.scope
+            .type_classes
+            .insert(type_class.name.clone(), type_class);
+    }
+    pub fn extern_instance(&mut self, instance: Rc<Instance>) -> FxHashMap<Rc<str>, VarId> {
+        self.scope
+            .instances
+            .entry(TypeClassRef(instance.class.clone()))
+            .or_default()
+            .push_back(instance.clone());
+        let mut method_var_ids = FxHashMap::default();
+        for (method_name, method_type_scheme) in instance.class.methods.iter() {
+            let method_type_scheme = method_type_scheme.subst(&instance.assigned_types);
+            let var_id = self.var_arena.alloc(VarData {
+                name: method_name.clone(),
+                ty: method_type_scheme.clone(),
+            });
+            self.extern_funcs
+                .entry(method_name.clone())
+                .or_default()
+                .push_back((method_type_scheme.clone(), var_id, Some(instance.clone())));
+            method_var_ids.insert(method_name.clone(), var_id);
+        }
+        method_var_ids
+    }
     pub fn extern_func(&mut self, name: impl Into<Rc<str>>, type_scheme: TypeScheme) -> VarId {
         let name = name.into();
         let var_id = self.var_arena.alloc(VarData {
@@ -250,12 +262,10 @@ impl InferencePool {
         self.extern_funcs
             .entry(name.clone())
             .or_default()
-            .push_back((type_scheme.clone(), var_id));
+            .push_back((type_scheme.clone(), var_id, None));
         self.scope
             .vars
-            .entry(name)
-            .or_default()
-            .push_back(VarType::Annotated(type_scheme));
+            .insert(name, VarType::Annotated(type_scheme));
         var_id
     }
     pub fn tyvar_arena(&mut self) -> &mut id_arena::Arena<TyVarBody> {
@@ -273,6 +283,12 @@ impl InferencePool {
             .copied()
             .map(|var| (var, Typing::TmpTyVar(self.tmp_var_arena.alloc_unassigned())))
             .collect();
+        Typing::from(&type_scheme.ty, &subst)
+    }
+    fn embody_with_subst(&mut self, type_scheme: &TypeScheme, mut subst: FxHashMap<TyVar, Typing>) -> Typing {
+        for var in &type_scheme.bound_vars {
+            subst.insert(*var, Typing::TmpTyVar(self.tmp_var_arena.alloc_unassigned()));
+        }
         Typing::from(&type_scheme.ty, &subst)
     }
     pub fn infer(&mut self, expr: Rc<Expr>) -> errors::Result<Typing> {
@@ -298,7 +314,8 @@ impl InferencePool {
             Expr::LitList(items) => {
                 let inner_id = self.tmp_var_arena.alloc_unassigned();
                 for item in items {
-                    self.infer_as(item.clone(), Typing::TmpTyVar(inner_id))?;
+                    let inner_ty = self.infer(item.clone())?;
+                    unify(&inner_ty, &Typing::TmpTyVar(inner_id), &mut self.tmp_var_arena, item.clone())?;
                 }
                 Ok(Typing::List(Typing::TmpTyVar(inner_id).into()))
             }
@@ -314,11 +331,14 @@ impl InferencePool {
                 Ok(last_ty)
             }
             Expr::AppFun(f, param) => {
+                let f_ty = self.infer(f.clone())?;
                 let param_ty = self.infer(param.clone())?;
                 let tmp_id = self.tmp_var_arena.alloc_unassigned();
-                self.infer_as(
+                unify(
+                    &f_ty,
+                    &Typing::Arrow(param_ty.into(), Typing::TmpTyVar(tmp_id).into()),
+                    &mut self.tmp_var_arena,
                     f.clone(),
-                    Typing::Arrow(param_ty.into(), Typing::TmpTyVar(tmp_id).into()),
                 )?;
                 Ok(Typing::TmpTyVar(tmp_id).into())
             }
@@ -342,205 +362,45 @@ impl InferencePool {
             }
             Expr::Member(_, _) => todo!(),
             Expr::Ident(name) => {
-                let Some(var_ty) = self.scope.vars.get(&*name) else {
-                    return Err(errors::Error::UndefiedIdent(name.clone()));
-                };
-                assert!(var_ty.len() >= 1);
-                if var_ty.len() == 1 {
-                    match var_ty[0].clone() {
+                if let Some(var_ty) = self.scope.vars.get(&*name) {
+                    match var_ty.clone() {
                         VarType::Annotated(type_scheme) => Ok(self.embody(&type_scheme)),
                         VarType::Unannotated(typing) => Ok(typing.clone()),
                     }
-                } else {
-                    let type_schemes = var_ty
-                        .clone()
-                        .into_iter()
-                        .map(|var_ty| match var_ty {
-                            VarType::Annotated(annotated) => annotated.clone(),
-                            VarType::Unannotated(_) => unreachable!(),
-                        })
-                        .collect_vec();
-                    let typings = type_schemes
-                        .into_iter()
-                        .map(|type_scheme| self.embody(&type_scheme))
-                        .collect_vec();
-                    Ok(Typing::TmpTyVar(
-                        self.tmp_var_arena.alloc_assigned_many(typings),
-                    ))
                 }
-            }
-            Expr::Let(name, assigned_expr, None) => {
-                let right_ty = self.infer(assigned_expr.clone())?;
-                let var_ty = VarType::Unannotated(right_ty);
-                self.scope
-                    .vars
-                    .insert(name.clone(), vector![var_ty.clone()]);
-                self.let_type.insert(ExprRef(expr), var_ty);
-                Ok(Typing::Unit)
-            }
-            Expr::Let(name, assigned_expr, Some(kind_like)) => {
-                let type_scheme = self.eval_kindlike(kind_like)?;
-                let ty = Typing::from(&type_scheme.ty, &FxHashMap::default());
-                self.infer_as(assigned_expr.clone(), ty)?;
-                let var_ty = VarType::Annotated(type_scheme);
-                self.scope
-                    .vars
-                    .insert(name.clone(), vector![var_ty.clone()]);
-                self.let_type.insert(ExprRef(expr), var_ty);
-                Ok(Typing::Unit)
-            }
-        }
-    }
-    pub fn infer_as(&mut self, expr: Rc<Expr>, typing: Typing) -> errors::Result<()> {
-        if self.expr_typing.contains_key(&ExprRef(expr.clone())) {
-            return Ok(());
-        }
-        self.infer_as_inner(expr.clone(), &typing)?;
-        self.expr_typing.insert(
-            ExprRef(expr.clone()),
-            ExprTyping {
-                _expr: expr,
-                typing,
-            },
-        );
-        Ok(())
-    }
-    pub fn infer_as_inner(&mut self, expr: Rc<Expr>, typing: &Typing) -> errors::Result<()> {
-        match &*expr {
-            Expr::LitInt(_) => {
-                unify(&Typing::Int, typing, &mut self.tmp_var_arena, expr)?;
-                Ok(())
-            }
-            Expr::LitFloat(_) => {
-                unify(&Typing::Float, typing, &mut self.tmp_var_arena, expr)?;
-                Ok(())
-            }
-            Expr::LitStr(_) => {
-                unify(&Typing::String, typing, &mut self.tmp_var_arena, expr)?;
-                Ok(())
-            }
-            Expr::Unit => unify(&Typing::Unit, typing, &mut self.tmp_var_arena, expr).map(|_| ()),
-            Expr::LitList(items) => {
-                let inner_id = self.tmp_var_arena.alloc_unassigned();
-                unify(
-                    &Typing::List(Typing::TmpTyVar(inner_id).into()),
-                    typing,
-                    &mut self.tmp_var_arena,
-                    expr.clone(),
-                )?;
-                for item in items {
-                    self.infer_as(item.clone(), Typing::TmpTyVar(inner_id))?;
-                }
-                Ok(())
-            }
-            Expr::Brace(statements) if statements.is_empty() => {
-                unify(&Typing::Unit, typing, &mut self.tmp_var_arena, expr)?;
-                Ok(())
-            }
-            Expr::Brace(statements) => {
-                let mut scope = self.scope.clone();
-                std::mem::swap(&mut scope, &mut self.scope);
-                for statement in &statements[..statements.len() - 1] {
-                    self.infer(statement.clone())?;
-                }
-                self.infer_as(statements[statements.len() - 1].clone(), typing.clone())?;
-                std::mem::swap(&mut scope, &mut self.scope);
-                Ok(())
-            }
-            Expr::AppFun(f, param) => {
-                let param_ty = self.infer(param.clone())?;
-                self.infer_as(
-                    f.clone(),
-                    Typing::Arrow(param_ty.into(), typing.clone().into()),
-                )?;
-                Ok(())
-            }
-            Expr::BinOp(l, op, r) => {
-                let op_ident = Rc::new(Expr::Ident(op.binop_to_str().into()));
-                let app_fun = Rc::new(Expr::AppFun(op_ident, l.clone()));
-                let app_fun2 = Rc::new(Expr::AppFun(app_fun, r.clone()));
-                self.desugared.insert(ExprRef(expr), app_fun2.clone());
-                self.infer_as(app_fun2, typing.clone())
-            }
-            Expr::UnOp(op, operand) => {
-                if *op == Token::Apostrophe {
-                    let tmp_var_id = self.tmp_var_arena.alloc_unassigned();
-                    unify(
-                        &Typing::Arrow(Typing::Unit.into(), Typing::TmpTyVar(tmp_var_id).into()),
-                        typing,
-                        &mut self.tmp_var_arena,
-                        expr.clone(),
-                    )?;
-                    self.infer_as(operand.clone(), Typing::TmpTyVar(tmp_var_id))?;
-                    Ok(())
-                } else {
-                    let op_ident = Rc::new(Expr::Ident(op.binop_to_str().into()));
-                    let app_fun = Rc::new(Expr::AppFun(op_ident, operand.clone()));
-                    self.desugared.insert(ExprRef(expr), app_fun.clone());
-                    self.infer_as(app_fun, typing.clone())
-                }
-            }
-            Expr::Member(_, _) => todo!(),
-            Expr::Ident(name) => {
-                let Some(var_ty) = self.scope.vars.get(&*name) else {
-                    return Err(errors::Error::UndefiedIdent(name.clone()));
-                };
-                assert!(var_ty.len() >= 1);
-                if var_ty.len() == 1 {
-                    match var_ty[0].clone() {
-                        VarType::Annotated(type_scheme) => {
-                            let ty = self.embody(&type_scheme);
-                            unify(&ty, typing, &mut self.tmp_var_arena, expr)?;
-                        }
-                        VarType::Unannotated(var_typing) => {
-                            unify(&var_typing, typing, &mut self.tmp_var_arena, expr)?;
-                        }
+                else if let Some(class) = self.scope.method_classes.get(&*name) {
+                    let mut subst = FxHashMap::default();
+                    for bound_var in &class.bound_vars {
+                        subst.insert(*bound_var, Typing::TmpTyVar(self.tmp_var_arena.alloc_unassigned()));
                     }
-                    Ok(())
-                } else {
-                    let type_schemes = var_ty
-                        .clone()
-                        .into_iter()
-                        .map(|var_ty| match var_ty {
-                            VarType::Annotated(annotated) => annotated.clone(),
-                            VarType::Unannotated(_) => unreachable!(),
-                        })
-                        .collect_vec();
-                    let typings = type_schemes
-                        .into_iter()
-                        .map(|type_scheme| self.embody(&type_scheme))
-                        .collect_vec();
-                    let tmp_var_id = self.tmp_var_arena.alloc_assigned_many(typings);
-                    unify(
-                        &Typing::TmpTyVar(tmp_var_id),
-                        typing,
-                        &mut self.tmp_var_arena,
-                        expr,
-                    )?;
-                    Ok(())
+                    let type_scheme = &class.methods[&*name].clone();
+                    Ok(self.embody_with_subst(&type_scheme, subst))
+                }
+                else
+                {
+                    Err(errors::Error::UndefiedIdent(name.clone()))
                 }
             }
             Expr::Let(name, assigned_expr, None) => {
-                let right_ty = self.infer(assigned_expr.clone())?;
-                let var_ty = VarType::Unannotated(right_ty);
+                let assigned_ty = self.infer(assigned_expr.clone())?;
+                let var_ty = VarType::Unannotated(assigned_ty);
                 self.scope
                     .vars
-                    .insert(name.clone(), vector![var_ty.clone()]);
-                self.let_type.insert(ExprRef(expr.clone()), var_ty);
-                unify(&Typing::Unit, typing, &mut self.tmp_var_arena, expr.clone())?;
-                Ok(())
+                    .insert(name.clone(), var_ty.clone());
+                self.let_type.insert(ExprRef(expr), var_ty);
+                Ok(Typing::Unit)
             }
             Expr::Let(name, assigned_expr, Some(kind_like)) => {
                 let type_scheme = self.eval_kindlike(kind_like)?;
                 let ty = Typing::from(&type_scheme.ty, &FxHashMap::default());
-                self.infer_as(assigned_expr.clone(), ty)?;
+                let assigned_ty = self.infer(assigned_expr.clone())?;
+                unify(&assigned_ty, &ty, &mut self.tmp_var_arena, assigned_expr.clone())?;
                 let var_ty = VarType::Annotated(type_scheme);
                 self.scope
                     .vars
-                    .insert(name.clone(), vector![var_ty.clone()]);
-                self.let_type.insert(ExprRef(expr.clone()), var_ty);
-                unify(&Typing::Unit, typing, &mut self.tmp_var_arena, expr.clone())?;
-                Ok(())
+                    .insert(name.clone(), var_ty.clone());
+                self.let_type.insert(ExprRef(expr), var_ty);
+                Ok(Typing::Unit)
             }
         }
     }
@@ -621,7 +481,7 @@ impl InferencePool {
             .map(|(name, tys)| {
                 (
                     name.clone(),
-                    tys.iter().cloned().map(|(_, var_id)| var_id).collect(),
+                    tys.iter().cloned().map(|(_, var_id, instance)| (var_id, instance)).collect(),
                 )
             })
             .collect();
@@ -639,7 +499,7 @@ impl InferencePool {
         &mut self,
         expr: Rc<Expr>,
         expr_var_id: &mut FxHashMap<ExprRef, VarId>,
-        new_scope: &mut im_rc::HashMap<Rc<str>, Vector<VarId>, fxhash::FxBuildHasher>,
+        new_scope: &mut im_rc::HashMap<Rc<str>, Vector<(VarId, Option<Rc<Instance>>)>, fxhash::FxBuildHasher>,
     ) -> errors::Result<()> {
         if let Some(desugared) = self.desugared.get(&ExprRef(expr.clone())) {
             return self.set_expr_var_id(desugared.clone(), expr_var_id, new_scope);
@@ -681,7 +541,7 @@ impl InferencePool {
                 new_scope
                     .entry(name.clone())
                     .or_default()
-                    .push_back(new_var_id);
+                    .push_back((new_var_id, None));
                 Ok(())
             }
             Expr::Brace(statements) => {
@@ -697,15 +557,22 @@ impl InferencePool {
                 let ty = typing.try_to_type(&mut self.tmp_var_arena)?;
                 let matched = new_scope[&*name]
                     .iter()
-                    .filter(|&&var_id| self.var_arena[var_id].ty.assume_subst(&ty).is_some())
+                    .cloned()
+                    .filter(|&(var_id, _)| self.var_arena[var_id].ty.assume_subst(&ty).is_some())
                     .collect_vec();
                 match matched.len() {
                     0 => Err(errors::Error::UndefiedIdent(name.clone())),
                     1 => {
-                        expr_var_id.insert(ExprRef(expr), *matched[0]);
+                        expr_var_id.insert(ExprRef(expr), matched[0].0);
                         Ok(())
                     }
-                    2.. => unreachable!(),
+                    2.. => Err(errors::Error::AmbigiousOverload {
+                        name: name.clone(),
+                        candidates: matched
+                            .into_iter()
+                            .map(|(_, instance)| instance)
+                            .collect(),
+                    }),
                 }
             }
         }

@@ -1,7 +1,6 @@
-use crate::ast::Expr;
 use fxhash::FxHashMap;
 use im_rc::Vector;
-use std::{fmt::Debug, hash::Hash, rc::Rc};
+use std::{fmt::Debug, rc::Rc};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct TyVarBody {
@@ -28,14 +27,14 @@ pub enum Type {
     Comma(Rc<Type>, Rc<Type>),
 }
 impl Type {
-    pub fn subst(&self, var: TyVar, ty: &Type) -> Type {
+    pub fn subst(&self, subst: &FxHashMap<TyVar, Type>) -> Type {
         match self {
             Type::Int | Type::Float | Type::String | Type::Bool | Type::Unit => self.clone(),
-            &Type::Var(v) if v == var => ty.clone(),
+            &Type::Var(v) if subst.contains_key(&v) => subst.get(&v).unwrap().clone(),
             Type::Var(_) => self.clone(),
-            Type::List(inner) => Type::List(Rc::new(inner.subst(var, ty))),
-            Type::Arrow(l, r) => Type::Arrow(Rc::new(l.subst(var, ty)), Rc::new(r.subst(var, ty))),
-            Type::Comma(l, r) => Type::Comma(Rc::new(l.subst(var, ty)), Rc::new(r.subst(var, ty))),
+            Type::List(inner) => Type::List(Rc::new(inner.subst(subst))),
+            Type::Arrow(l, r) => Type::Arrow(Rc::new(l.subst(subst)), Rc::new(r.subst(subst))),
+            Type::Comma(l, r) => Type::Comma(Rc::new(l.subst(subst)), Rc::new(r.subst(subst))),
         }
     }
     pub fn list(inner: impl Into<Rc<Type>>) -> Self {
@@ -138,4 +137,34 @@ impl TypeScheme {
             _ => false,
         }
     }
+    pub fn subst(&self, subst: &FxHashMap<TyVar, Type>) -> TypeScheme {
+        TypeScheme {
+            bound_vars: self.bound_vars.clone(),
+            ty: Rc::new(self.ty.subst(subst)),
+        }
+    }
+}
+
+pub struct TypeClass {
+    pub name: Rc<str>,
+    pub bound_vars: Vector<TyVar>,
+    pub methods: FxHashMap<Rc<str>, TypeScheme>,
+}
+#[derive(Clone)]
+pub struct TypeClassRef(pub Rc<TypeClass>);
+impl PartialEq for TypeClassRef {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for TypeClassRef {}
+impl std::hash::Hash for TypeClassRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (&*self.0 as *const TypeClass as usize).hash(state);
+    }
+}
+
+pub struct Instance {
+    pub class: Rc<TypeClass>,
+    pub assigned_types: FxHashMap<TyVar, Type>,
 }

@@ -4,7 +4,7 @@ use crate::{
         program_data::VarId,
         types::{Instance, TyVarBody, Type, TypeClass, TypeClassRef, TypeScheme},
     },
-    runner::{self, core::Variable, obj::Func, obj::Object},
+    runner::{core::Runner, core::Variable, obj::Func, obj::Object},
 };
 use fxhash::FxHashMap;
 use im_rc::{HashMap, vector};
@@ -12,7 +12,7 @@ use im_rc::{HashMap, vector};
 macro_rules! native_func {
     ($runner_ident:ident, $p:pat => $body:expr) => {
         Object::Func(Func::NativeFunc(Rc::new(
-            move |$runner_ident: &mut runner::core::Runner, arg: Rc<runner::obj::Object>| {
+            move |$runner_ident: &mut Runner, arg: Rc<Object>| {
                 match &*arg {
                     $p => $body,
                     #[allow(unreachable_patterns)]
@@ -103,8 +103,7 @@ impl<'a> StdLibDefiner<'a> {
             .inference_pool
             .extern_func(name.clone(), type_scheme.clone());
 
-        self.funcs
-            .insert(var_id, (name, type_scheme, obj.into()));
+        self.funcs.insert(var_id, (name, type_scheme, obj.into()));
     }
     fn def_show_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
@@ -125,8 +124,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "show",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::Int(n) => {
-                        Ok(Rc::new(runner::obj::Object::String(Rc::new(n.to_string()))))
+                    Object::Int(n) => {
+                        Ok(Rc::new(Object::String(Rc::new(n.to_string()))))
                     }
                 )),
             )]),
@@ -139,8 +138,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "show",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::Float(n) => {
-                        Ok(Rc::new(runner::obj::Object::String(Rc::new(n.to_string()))))
+                    Object::Float(n) => {
+                        Ok(Rc::new(Object::String(Rc::new(n.to_string()))))
                     }
                 )),
             )]),
@@ -153,8 +152,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "show",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::Bool(b) => {
-                        Ok(Rc::new(runner::obj::Object::String(Rc::new(b.to_string()))))
+                    Object::Bool(b) => {
+                        Ok(Rc::new(Object::String(Rc::new(b.to_string()))))
                     }
                 )),
             )]),
@@ -167,8 +166,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "show",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::String(s) => {
-                        Ok(Rc::new(runner::obj::Object::String(s.clone())))
+                    Object::String(s) => {
+                        Ok(Rc::new(Object::String(s.clone())))
                     }
                 )),
             )]),
@@ -181,8 +180,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "show",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::Unit => {
-                        Ok(Rc::new(runner::obj::Object::String(Rc::new("()".to_string()))))
+                    Object::Unit => {
+                        Ok(Rc::new(Object::String(Rc::new("()".to_string()))))
                     }
                 )),
             )]),
@@ -210,8 +209,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "+",
                 Rc::new(curry!([], _runner,
-                    (runner::obj::Object::Int(x), runner::obj::Object::Int(y)) => {
-                        Ok(Rc::new(runner::obj::Object::Int(x + y)))
+                    (Object::Int(x), Object::Int(y)) => {
+                        Ok(Rc::new(Object::Int(x + y)))
                     }
                 )),
             )]),
@@ -224,8 +223,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "+",
                 Rc::new(curry!([], _runner,
-                    (runner::obj::Object::Float(x), runner::obj::Object::Float(y)) => {
-                        Ok(Rc::new(runner::obj::Object::Float(x + y)))
+                    (Object::Float(x), Object::Float(y)) => {
+                        Ok(Rc::new(Object::Float(x + y)))
                     }
                 )),
             )]),
@@ -237,14 +236,11 @@ impl<'a> StdLibDefiner<'a> {
             [Type::String],
             &HashMap::from_iter([(
                 "+",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::String(x) => {
-                        let x = x.clone();
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::String(y) => {
-                                Ok(Rc::new(runner::obj::Object::String(Rc::new(format!("{}{}", x, y)))))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::String(x), Object::String(y)) => {
+                        let mut result = Rc::unwrap_or_clone(x);
+                        result.push_str(&y);
+                        Ok(Rc::new(Object::String(Rc::new(result))))
                     }
                 )),
             )]),
@@ -257,16 +253,11 @@ impl<'a> StdLibDefiner<'a> {
             [Type::List(Rc::new(Type::Var(b)))],
             &HashMap::from_iter([(
                 "+",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::List(x) => {
-                        let x = x.clone();
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::List(y) => {
-                                let mut x = x.clone();
-                                x.append(y.clone());
-                                Ok(Rc::new(runner::obj::Object::List(x)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::List(x), Object::List(y)) => {
+                        let mut result = x.clone();
+                        result.append(y);
+                        Ok(Rc::new(Object::List(result)))
                     }
                 )),
             )]),
@@ -293,15 +284,8 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Int],
             &HashMap::from_iter([(
                 "-",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Int(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Int(y) => {
-                                Ok(Rc::new(runner::obj::Object::Int(x - y)))
-                            }
-                        )))
-                    }
+                Rc::new(curry!([], _runner,
+                    (Object::Int(x), Object::Int(y)) => Ok(Rc::new(Object::Int(x - y)))
                 )),
             )]),
         );
@@ -312,16 +296,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Float],
             &HashMap::from_iter([(
                 "-",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Float(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Float(y) => {
-                                Ok(Rc::new(runner::obj::Object::Float(x - y)))
-                            }
-                        )))
-                    }
-                )),
+                Rc::new(curry!([], _runner,
+                    (Object::Float(x), Object::Float(y)) => Ok(Rc::new(Object::Float(x - y)))
+                ))
             )]),
         );
     }
@@ -346,14 +323,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Int],
             &HashMap::from_iter([(
                 "*",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Int(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Int(y) => {
-                                Ok(Rc::new(runner::obj::Object::Int(x * y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Int(x), Object::Int(y)) => {
+                        Ok(Rc::new(Object::Int(x * y)))
                     }
                 )),
             )]),
@@ -364,14 +336,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Float],
             &HashMap::from_iter([(
                 "*",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Float(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Float(y) => {
-                                Ok(Rc::new(runner::obj::Object::Float(x * y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Float(x), Object::Float(y)) => {
+                        Ok(Rc::new(Object::Float(x * y)))
                     }
                 )),
             )]),
@@ -398,14 +365,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Int],
             &HashMap::from_iter([(
                 "/",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Int(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Int(y) => {
-                                Ok(Rc::new(runner::obj::Object::Int(x / y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Int(x), Object::Int(y)) => {
+                        Ok(Rc::new(Object::Int(x / y)))
                     }
                 )),
             )]),
@@ -416,16 +378,11 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Float],
             &HashMap::from_iter([(
                 "/",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Float(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Float(y) => {
-                                Ok(Rc::new(runner::obj::Object::Float(x / y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Float(x), Object::Float(y)) => {
+                        Ok(Rc::new(Object::Float(x / y)))
                     }
-                )),
+                ))
             )]),
         );
     }
@@ -450,14 +407,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Int],
             &HashMap::from_iter([(
                 "%",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Int(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Int(y) => {
-                                Ok(Rc::new(runner::obj::Object::Int(x % y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Int(x), Object::Int(y)) => {
+                        Ok(Rc::new(Object::Int(x % y)))
                     }
                 )),
             )]),
@@ -468,14 +420,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Float],
             &HashMap::from_iter([(
                 "%",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Float(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Float(y) => {
-                                Ok(Rc::new(runner::obj::Object::Float(x % y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Float(x), Object::Float(y)) => {
+                        Ok(Rc::new(Object::Float(x % y)))
                     }
                 )),
             )]),
@@ -500,8 +447,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "-_",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::Int(x) => {
-                        Ok(Rc::new(runner::obj::Object::Int(-x)))
+                    Object::Int(x) => {
+                        Ok(Rc::new(Object::Int(-x)))
                     }
                 )),
             )]),
@@ -513,8 +460,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "-_",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::Float(x) => {
-                        Ok(Rc::new(runner::obj::Object::Float(-x)))
+                    Object::Float(x) => {
+                        Ok(Rc::new(Object::Float(-x)))
                     }
                 )),
             )]),
@@ -539,8 +486,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "!_",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::Bool(b) => {
-                        Ok(Rc::new(runner::obj::Object::Bool(!b)))
+                    Object::Bool(b) => {
+                        Ok(Rc::new(Object::Bool(!b)))
                     }
                 )),
             )]),
@@ -552,8 +499,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "!_",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::Int(x) => {
-                        Ok(Rc::new(runner::obj::Object::Int(!x)))
+                    Object::Int(x) => {
+                        Ok(Rc::new(Object::Int(!x)))
                     }
                 )),
             )]),
@@ -580,14 +527,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Bool],
             &HashMap::from_iter([(
                 "&",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Bool(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Bool(y) => {
-                                Ok(Rc::new(runner::obj::Object::Bool(x & y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Bool(x), Object::Bool(y)) => {
+                        Ok(Rc::new(Object::Bool(x & y)))
                     }
                 )),
             )]),
@@ -598,16 +540,11 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Int],
             &HashMap::from_iter([(
                 "&",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Int(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Int(y) => {
-                                Ok(Rc::new(runner::obj::Object::Int(x & y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Int(x), Object::Int(y)) => {
+                        Ok(Rc::new(Object::Int(x & y)))
                     }
-                )),
+                ))
             )]),
         );
     }
@@ -632,14 +569,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Bool],
             &HashMap::from_iter([(
                 "|",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Bool(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Bool(y) => {
-                                Ok(Rc::new(runner::obj::Object::Bool(x | y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Bool(x), Object::Bool(y)) => {
+                        Ok(Rc::new(Object::Bool(x | y)))
                     }
                 )),
             )]),
@@ -650,14 +582,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Int],
             &HashMap::from_iter([(
                 "|",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Int(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Int(y) => {
-                                Ok(Rc::new(runner::obj::Object::Int(x | y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Int(x), Object::Int(y)) => {
+                        Ok(Rc::new(Object::Int(x | y)))
                     }
                 )),
             )]),
@@ -704,8 +631,8 @@ impl<'a> StdLibDefiner<'a> {
                         };
                         let eq_result = runner.call(f, Rc::new(r))?;
                         match &*eq_result {
-                            runner::obj::Object::Bool(b) => {
-                                Ok(Rc::new(runner::obj::Object::Bool(!b)))
+                            Object::Bool(b) => {
+                                Ok(Rc::new(Object::Bool(!b)))
                             },
                             _ => panic!("Eq::== did not return a Bool"),
                         }
@@ -720,14 +647,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Int],
             &HashMap::from_iter([(
                 "==",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Int(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Int(y) => {
-                                Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Int(x), Object::Int(y)) => {
+                        Ok(Rc::new(Object::Bool(x == y)))
                     }
                 )),
             )]),
@@ -738,14 +660,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Float],
             &HashMap::from_iter([(
                 "==",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Float(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Float(y) => {
-                                Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Float(x), Object::Float(y)) => {
+                        Ok(Rc::new(Object::Bool(x == y)))
                     }
                 )),
             )]),
@@ -756,14 +673,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Bool],
             &HashMap::from_iter([(
                 "==",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Bool(x) => {
-                        let x = *x;
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Bool(y) => {
-                                Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Bool(x), Object::Bool(y)) => {
+                        Ok(Rc::new(Object::Bool(x == y)))
                     }
                 )),
             )]),
@@ -774,14 +686,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::String],
             &HashMap::from_iter([(
                 "==",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::String(x) => {
-                        let x = x.clone();
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::String(y) => {
-                                Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::String(x), Object::String(y)) => {
+                        Ok(Rc::new(Object::Bool(x == y)))
                     }
                 )),
             )]),
@@ -792,13 +699,9 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Unit],
             &HashMap::from_iter([(
                 "==",
-                Rc::new(native_func!(_runner,
-                    runner::obj::Object::Unit => {
-                        Ok(Rc::new(native_func!(_runner,
-                            runner::obj::Object::Unit => {
-                                Ok(Rc::new(runner::obj::Object::Bool(true)))
-                            }
-                        )))
+                Rc::new(curry!([], _runner,
+                    (Object::Unit, Object::Unit) => {
+                        Ok(Rc::new(Object::Bool(true)))
                     }
                 )),
             )]),
@@ -823,8 +726,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "len",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::String(s) => {
-                        Ok(Rc::new(runner::obj::Object::Int(s.len() as i64)))
+                    Object::String(s) => {
+                        Ok(Rc::new(Object::Int(s.len() as i64)))
                     }
                 )),
             )]),
@@ -837,8 +740,8 @@ impl<'a> StdLibDefiner<'a> {
             &HashMap::from_iter([(
                 "len",
                 Rc::new(native_func!(_runner,
-                    runner::obj::Object::List(elems) => {
-                        Ok(Rc::new(runner::obj::Object::Int(elems.len() as i64)))
+                    Object::List(elems) => {
+                        Ok(Rc::new(Object::Int(elems.len() as i64)))
                     }
                 )),
             )]),
@@ -861,16 +764,16 @@ impl<'a> StdLibDefiner<'a> {
             "map",
             type_scheam,
             native_func!(_runner,
-                runner::obj::Object::Func(f) => {
+                Object::Func(f) => {
                     let f = f.clone();
                     Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::List(elems) => {
+                        Object::List(elems) => {
                             let mut new_elems = im_rc::Vector::new();
                             for elem in elems.iter() {
                                 let mapped = _runner.call(&f, elem.clone())?;
                                 new_elems.push_back(mapped);
                             }
-                            Ok(Rc::new(runner::obj::Object::List(new_elems)))
+                            Ok(Rc::new(Object::List(new_elems)))
                         }
                     )))
                 }
@@ -892,14 +795,14 @@ impl<'a> StdLibDefiner<'a> {
             "filter",
             type_scheam,
             native_func!(_runner,
-                runner::obj::Object::Func(f) => {
+                Object::Func(f) => {
                     let f = f.clone();
                     Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::List(elems) => {
+                        Object::List(elems) => {
                             let mut new_elems = im_rc::Vector::new();
                             for elem in elems.iter() {
                                 let pred = _runner.call(&f, elem.clone())?;
-                                if let runner::obj::Object::Bool(b) = *pred {
+                                if let Object::Bool(b) = *pred {
                                     if b {
                                         new_elems.push_back(elem.clone());
                                     }
@@ -907,7 +810,7 @@ impl<'a> StdLibDefiner<'a> {
                                     panic!("filter predicate must return a boolean");
                                 }
                             }
-                            Ok(Rc::new(runner::obj::Object::List(new_elems)))
+                            Ok(Rc::new(Object::List(new_elems)))
                         }
                     )))
                 }
@@ -929,24 +832,20 @@ impl<'a> StdLibDefiner<'a> {
             )
         };
         self.def_func("zip", type_scheam,
-            native_func!(_runner,
-                runner::obj::Object::List(elems) => {
-                    let elems = elems.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::List(elems2) => {
-                            let elems2 = elems2.clone();
-                            let min_len = elems.len().min(elems2.len());
-                            let mut new_elems = im_rc::Vector::new();
-                            for i in 0..min_len {
-                                let left = elems.get(i).unwrap().clone();
-                                let right = elems2.get(i).unwrap().clone();
-                                new_elems.push_back(Rc::new(runner::obj::Object::Comma(left, right)));
-                            }
-                            Ok(Rc::new(runner::obj::Object::List(new_elems)))
-                        }
-                    )))
+            curry!([], _runner,
+                (Object::List(list1), Object::List(list2)) => {
+                    let len = std::cmp::min(list1.len(), list2.len());
+                    let mut zipped = im_rc::Vector::new();
+                    for i in 0..len {
+                        let pair = Rc::new(Object::Comma(
+                            list1[i].clone(),
+                            list2[i].clone(),
+                        ));
+                        zipped.push_back(pair);
+                    }
+                    Ok(Rc::new(Object::List(zipped)))
                 }
-            ),
+            )
         );
     }
     fn def_func_functions(&mut self) {
@@ -969,15 +868,10 @@ impl<'a> StdLibDefiner<'a> {
         self.def_func(
             ".>",
             type_scheam,
-            native_func!(_runner,
-                runner::obj::Object::Func(f) => {
-                    let f = f.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Func(g) => {
-                            Ok(Rc::new(runner::obj::Object::Func(
-                                f.clone().composition(g.clone())
-                            )))
-                        }
+            curry!([], _runner,
+                (Object::Func(f), Object::Func(g)) => {
+                    Ok(Rc::new(Object::Func(
+                        f.composition(g)
                     )))
                 }
             ),
@@ -1001,15 +895,10 @@ impl<'a> StdLibDefiner<'a> {
         self.def_func(
             "<.",
             type_scheam,
-            native_func!(_runner,
-                runner::obj::Object::Func(g) => {
-                    let g = g.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        runner::obj::Object::Func(f) => {
-                            Ok(Rc::new(runner::obj::Object::Func(
-                                f.clone().composition(g.clone())
-                            )))
-                        }
+            curry!([], _runner,
+                (Object::Func(g), Object::Func(f)) => {
+                    Ok(Rc::new(Object::Func(
+                        f.composition(g)
                     )))
                 }
             ),
@@ -1030,17 +919,10 @@ impl<'a> StdLibDefiner<'a> {
         self.def_func(
             "|>",
             type_scheam,
-            native_func!(_runner,
-                arg => {
-                    let arg = arg.clone();
-                    Ok(Rc::new(
-                        native_func!(_runner,
-                            runner::obj::Object::Func(f) => {
-                                let result = _runner.call(f, Rc::new(arg.clone()))?;
-                                Ok(result)
-                            }
-                        )
-                    ))
+            curry!([], runner,
+                (arg, Object::Func(f)) => {
+                    let result = runner.call(&f, Rc::new(arg.clone()))?;
+                    Ok(result)
                 }
             ),
         );
@@ -1060,15 +942,10 @@ impl<'a> StdLibDefiner<'a> {
         self.def_func(
             "<|",
             type_scheam,
-            native_func!(_runner,
-                runner::obj::Object::Func(f) => {
-                    let f = f.clone();
-                    Ok(Rc::new(native_func!(_runner,
-                        arg => {
-                            let result = _runner.call(&f, Rc::new(arg.clone()))?;
-                            Ok(result)
-                        }
-                    )))
+            curry!([], runner,
+                (Object::Func(f), arg) => {
+                    let result = runner.call(&f, Rc::new(arg))?;
+                    Ok(result)
                 }
             ),
         );
@@ -1097,14 +974,11 @@ impl<'a> StdLibDefiner<'a> {
                 ),
             )
         };
-        self.def_func(",", type_scheam, native_func!(_runner,
-            left => {
-                let left = left.clone();
-                Ok(Rc::new(native_func!(_runner,
-                    right => {
-                        let right = right.clone();
-                        Ok(Rc::new(runner::obj::Object::Comma(Rc::new(left.clone()), Rc::new(right.clone()))))
-                    }
+        self.def_func(",", type_scheam, curry!([], _runner,
+            (left, right) => {
+                Ok(Rc::new(Object::Comma(
+                    Rc::new(left.clone()),
+                    Rc::new(right.clone()),
                 )))
             }
         ));
@@ -1121,7 +995,7 @@ impl<'a> StdLibDefiner<'a> {
             "fst",
             type_scheam,
             native_func!(_runner,
-                runner::obj::Object::Comma(left, _right) => {
+                Object::Comma(left, _right) => {
                     Ok(left.clone())
                 }
             ),
@@ -1139,7 +1013,7 @@ impl<'a> StdLibDefiner<'a> {
             "snd",
             type_scheam,
             native_func!(_runner,
-                runner::obj::Object::Comma(_left, right) => {
+                Object::Comma(_left, right) => {
                     Ok(right.clone())
                 }
             ),
@@ -1150,9 +1024,9 @@ impl<'a> StdLibDefiner<'a> {
             "print",
             Type::arrow(Type::String, Type::Unit),
             native_func!(_runner,
-                runner::obj::Object::String(s) => {
+                Object::String(s) => {
                     println!("{}", s);
-                    Ok(Rc::new(runner::obj::Object::Unit))
+                    Ok(Rc::new(Object::Unit))
                 }
             ),
         );

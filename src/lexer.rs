@@ -88,7 +88,7 @@ pub enum Token {
     #[regex(r"([[:alpha:]]|_)([[:alnum:]]|_)*", |lex| Rc::from(lex.slice()))]
     Ident(Rc<str>),
     Forall,
-    Def
+    Def,
 }
 
 pub fn tokenize(src: &str) -> Option<Vec<Token>> {

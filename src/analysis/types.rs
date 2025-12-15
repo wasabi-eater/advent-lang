@@ -14,7 +14,7 @@ impl TyVarBody {
     }
 }
 pub type TyVar = id_arena::Id<TyVarBody>;
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Int,
     Float,
@@ -66,6 +66,7 @@ impl Debug for Type {
 pub struct TypeScheme {
     pub bound_vars: Vector<TyVar>,
     pub ty: Rc<Type>,
+    pub constraints: Vector<Rc<Instance>>,
 }
 impl Debug for TypeScheme {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -88,6 +89,7 @@ impl From<Type> for TypeScheme {
         TypeScheme {
             bound_vars: Vector::new(),
             ty: Rc::new(ty),
+            constraints: Vector::new(),
         }
     }
 }
@@ -107,6 +109,18 @@ impl TypeScheme {
         TypeScheme {
             bound_vars: bound_vars.into_iter().collect(),
             ty: ty.into(),
+            constraints: Vector::new(),
+        }
+    }
+    pub fn forall_with_constraints(
+        bound_vars: impl IntoIterator<Item = TyVar>,
+        ty: impl Into<Rc<Type>>,
+        constraints: impl IntoIterator<Item = Rc<Instance>>,
+    ) -> TypeScheme {
+        TypeScheme {
+            bound_vars: bound_vars.into_iter().collect(),
+            ty: ty.into(),
+            constraints: constraints.into_iter().collect(),
         }
     }
     fn assume_subst_inner(l: &Type, r: &Type, subst: &mut FxHashMap<TyVar, Type>) -> bool {
@@ -141,13 +155,14 @@ impl TypeScheme {
         TypeScheme {
             bound_vars: self.bound_vars.clone(),
             ty: Rc::new(self.ty.subst(subst)),
+            constraints: self.constraints.iter().map(|instance| Rc::new(instance.subst(subst))).collect(),
         }
     }
 }
-
+#[derive(Debug)]
 pub struct TypeClass {
     pub name: Rc<str>,
-    pub bound_vars: Vector<TyVar>,
+    pub bound_vars: Vec<TyVar>,
     pub methods: FxHashMap<Rc<str>, TypeScheme>,
 }
 #[derive(Clone)]
@@ -163,8 +178,51 @@ impl std::hash::Hash for TypeClassRef {
         (&*self.0 as *const TypeClass as usize).hash(state);
     }
 }
-
+impl Debug for TypeClassRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Instance {
-    pub class: Rc<TypeClass>,
-    pub assigned_types: FxHashMap<TyVar, Type>,
+    pub class: TypeClassRef,
+    pub assigned_types: Vector<Type>,
+}
+
+impl Instance {
+    pub fn assigned_types_map(&self) -> FxHashMap<TyVar, Type> {
+        let mut map = FxHashMap::default();
+        for (var, ty) in self
+            .class
+            .0
+            .bound_vars
+            .iter()
+            .cloned()
+            .zip(self.assigned_types.iter().cloned())
+        {
+            map.insert(var, ty);
+        }
+        map
+    }
+    pub fn subst(&self, subst: &FxHashMap<TyVar, Type>) -> Instance {
+        let assigned_types = self
+            .assigned_types
+            .iter()
+            .map(|ty| ty.subst(subst))
+            .collect();
+        Instance {
+            class: self.class.clone(),
+            assigned_types,
+        }
+    }
+    pub fn method_type_scheme(&self, method_name: &Rc<str>) -> Option<TypeScheme> {
+        Some(self.class.0.methods.get(method_name)?.clone().subst(&self.assigned_types_map()))
+    }
+    pub fn method_type_schemes(&self) -> FxHashMap<Rc<str>, TypeScheme> {
+        let mut map = FxHashMap::default();
+        for (name, type_scheme) in &self.class.0.methods {
+            map.insert(name.clone(), type_scheme.subst(&self.assigned_types_map()));
+        }
+        map
+    }
 }

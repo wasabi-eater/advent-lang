@@ -88,12 +88,14 @@ pub enum Token {
     #[regex(r"([[:alpha:]]|_)([[:alnum:]]|_)*", |lex| Rc::from(lex.slice()))]
     Ident(Rc<str>),
     Forall,
+    Def
 }
 
 pub fn tokenize(src: &str) -> Result<Vec<Token>, ()> {
     Token::lexer(src)
         .map_ok(|token| match token {
             Token::Ident(word) if &*word == "forall" => Token::Forall,
+            Token::Ident(word) if &*word == "def" => Token::Def,
             other => other,
         })
         .collect()
@@ -123,6 +125,8 @@ impl Token {
             Token::ShiftRight => ">>",
             Token::CompositionRight => ".>",
             Token::CompositionLeft => "<.",
+            Token::DoubleEqual => "==",
+            Token::NotEqual => "!=",
             _ => panic!(),
         }
     }

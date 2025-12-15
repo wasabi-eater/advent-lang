@@ -1,5 +1,5 @@
 use super::core::Runner;
-use crate::{ast::Expr, runner::errors};
+use crate::{analysis::types::Instance, ast::Expr, runner::errors};
 use im_rc::Vector;
 use std::{fmt::Debug, rc::Rc};
 

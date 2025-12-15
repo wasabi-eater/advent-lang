@@ -26,11 +26,16 @@ fn statement<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Cl
             Token::Ident(s) => s
         };
         choice((
-            ident
-                .then(just(Token::Colon).ignore_then(kind_like()).or_not())
+            just(Token::Def)
+                .ignore_then(ident)
+                .then(just(Token::Colon).ignore_then(kind_like()))
                 .then_ignore(just(Token::Equal))
                 .then(expr.clone())
-                .map(move |((name, kind_like), e)| Rc::new(Expr::Let(name, e, kind_like))),
+                .map(move |((name, kind_like), e)| Rc::new(Expr::Def(name, e, kind_like))),
+            ident.then(just(Token::Colon).ignore_then(kind()).or_not())
+                .then_ignore(just(Token::Equal))
+                .then(expr.clone())
+                .map(move |((name, kind), e)| Expr::Let(name, e, kind).into()),
             expr,
         ))
     })

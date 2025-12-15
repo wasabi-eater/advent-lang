@@ -16,7 +16,8 @@ pub enum Expr {
     Ident(Rc<str>),
     Brace(Vec<Rc<Expr>>),
     Unit,
-    Let(Rc<str>, Rc<Expr>, Option<KindLike>),
+    Let(Rc<str>, Rc<Expr>, Option<Rc<Kind>>),
+    Def(Rc<str>, Rc<Expr>, KindLike),
 }
 #[derive(Clone, PartialEq, Eq)]
 pub enum Kind {
@@ -67,8 +68,9 @@ impl Debug for Expr {
                 Ok(())
             }
             Expr::Unit => f.write_str("()"),
-            Expr::Let(name, expr, Some(kind_like)) => write!(f, "{name}: {kind_like:?} = {expr:?}"),
+            Expr::Let(name, expr, Some(kind)) => write!(f, "{name}: {kind:?} = {expr:?}"),
             Expr::Let(name, expr, None) => write!(f, "{name} = {expr:?}"),
+            Expr::Def(name, expr, kind_like) => write!(f, "{name}: {kind_like:?} = {expr:?}"),
         }
     }
 }

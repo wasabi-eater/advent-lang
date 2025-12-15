@@ -59,10 +59,7 @@ fn type_declaration_test() {
         Ok(Expr::Let(
             "x".into(),
             Expr::LitInt("5".into()).into(),
-            Some(KindLike {
-                bound_vars: vec![],
-                kind: Kind::Ident("Int".into()).into()
-            })
+            Some(Kind::Ident("Int".into()).into())
         )
         .into())
     );
@@ -80,18 +77,15 @@ fn type_declaration_test() {
         Ok(Expr::Let(
             "x".into(),
             Expr::Ident("id".into()).into(),
-            Some(KindLike {
-                bound_vars: vec![],
-                kind: Kind::Arrow(
+            Some(Kind::Arrow(
                     Kind::Ident("Int".into()).into(),
                     Kind::Ident("Int".into()).into()
-                )
-                .into()
-            })
+                ).into())
         )
         .into())
     );
     let input = [
+        Token::Def,
         Token::Ident("unknown".into()),
         Token::Colon,
         Token::Forall,
@@ -103,13 +97,13 @@ fn type_declaration_test() {
     ];
     assert_eq!(
         parser().parse(&input).into_result(),
-        Ok(Expr::Let(
+        Ok(Expr::Def(
             "unknown".into(),
             Expr::Ident("panic".into()).into(),
-            Some(KindLike {
+            KindLike {
                 bound_vars: vec!["a".into()],
                 kind: Kind::Ident("a".into()).into()
-            })
+            }
         )
         .into())
     );

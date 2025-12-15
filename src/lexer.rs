@@ -91,14 +91,15 @@ pub enum Token {
     Def
 }
 
-pub fn tokenize(src: &str) -> Result<Vec<Token>, ()> {
+pub fn tokenize(src: &str) -> Option<Vec<Token>> {
     Token::lexer(src)
         .map_ok(|token| match token {
             Token::Ident(word) if &*word == "forall" => Token::Forall,
             Token::Ident(word) if &*word == "def" => Token::Def,
             other => other,
         })
-        .collect()
+        .try_collect()
+        .ok()
 }
 
 impl Token {

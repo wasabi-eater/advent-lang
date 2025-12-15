@@ -58,7 +58,7 @@ impl Debug for Expr {
             Expr::UnOp(op, e) => write!(f, "({op:?}{e:?})"),
             Expr::AppFun(fun, p) => write!(f, "({fun:?} {p:?})"),
             Expr::Member(e, name) => write!(f, "({e:?}.{name})"),
-            Expr::Ident(name) => f.write_str(&*name),
+            Expr::Ident(name) => f.write_str(name),
             Expr::Brace(statements) => {
                 f.write_str("{")?;
                 for statement in statements {
@@ -94,20 +94,12 @@ impl Debug for KindLike {
         let mut is_first = true;
         for var in &self.bound_vars {
             if is_first {
-                f.write_str(&*var)?;
+                f.write_str(var)?;
             } else {
                 write!(f, ", {var}")?;
             }
             is_first = false;
         }
         write!(f, ". {:?}", self.kind)
-    }
-}
-
-pub struct Arena {}
-
-impl Arena {
-    pub fn new() -> Self {
-        Self {}
     }
 }

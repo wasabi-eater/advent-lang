@@ -77,10 +77,13 @@ fn type_declaration_test() {
         Ok(Expr::Let(
             "x".into(),
             Expr::Ident("id".into()).into(),
-            Some(Kind::Arrow(
+            Some(
+                Kind::Arrow(
                     Kind::Ident("Int".into()).into(),
                     Kind::Ident("Int".into()).into()
-                ).into())
+                )
+                .into()
+            )
         )
         .into())
     );

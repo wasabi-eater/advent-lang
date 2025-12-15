@@ -10,7 +10,8 @@ use crate::{
         types::Instance,
     },
     ast::Expr,
-    runner::obj::Func, std_lib,
+    runner::obj::Func,
+    std_lib,
 };
 
 pub struct Runner {
@@ -18,10 +19,16 @@ pub struct Runner {
     scope: Scope,
     pub instance_methods: FxHashMap<Rc<Instance>, FxHashMap<Rc<str>, Variable>>,
 }
+pub type DefInner = Rc<
+    dyn Fn(
+        &mut Runner,
+        im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>,
+    ) -> errors::Result<Rc<Object>>,
+>;
 #[derive(Clone)]
 pub enum Variable {
     Var(Rc<Object>),
-    Def(Rc<dyn Fn(&mut Runner, im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>) -> errors::Result<Rc<Object>>>),
+    Def(DefInner),
 }
 impl From<Rc<Object>> for Variable {
     fn from(obj: Rc<Object>) -> Self {
@@ -41,14 +48,12 @@ pub struct Scope {
 }
 
 impl Runner {
-    pub fn new(
-        program_data: ProgramData,
-        std_lib: std_lib::StdLib,
-    ) -> Self {
+    pub fn new(program_data: ProgramData, std_lib: std_lib::StdLib) -> Self {
         Self {
             program_data,
             scope: Scope {
-                vars: std_lib.extern_funcs
+                vars: std_lib
+                    .extern_funcs
                     .into_iter()
                     .map(|(var_id, (_, _, obj))| (var_id, obj))
                     .collect(),
@@ -57,7 +62,11 @@ impl Runner {
             instance_methods: std_lib.instance_methods,
         }
     }
-    pub fn read_var(&mut self, variable: &Variable, given_instance: im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>) -> errors::Result<Rc<Object>> {
+    pub fn read_var(
+        &mut self,
+        variable: &Variable,
+        given_instance: im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>,
+    ) -> errors::Result<Rc<Object>> {
         match variable {
             Variable::Var(obj) => Ok(obj.clone()),
             Variable::Def(def) => def(self, given_instance),
@@ -88,7 +97,7 @@ impl Runner {
             Expr::Unit => Ok(Rc::new(Object::Unit)),
             Expr::Ident(_) => {
                 let ident_ref = self.program_data.expr_ident_ref[&ExprRef(expr.clone())].clone();
-                
+
                 let (data, mut given_instance) = match ident_ref {
                     IdentRef::Var(var_id, given_instance) => {
                         let data = self.scope.vars[&var_id].clone();
@@ -128,7 +137,7 @@ impl Runner {
                 let assigned_expr = assigned_expr.clone();
                 self.scope.vars.insert(
                     var_id,
-                    Variable::Def(Rc::new(move |runner: &mut Runner, instance_replace | {
+                    Variable::Def(Rc::new(move |runner: &mut Runner, instance_replace| {
                         let old_scope = runner.scope.clone();
                         runner.scope = scope.clone();
                         runner.scope.instance_replace.extend(instance_replace);
@@ -145,11 +154,10 @@ impl Runner {
         }
     }
     pub fn call(&mut self, func: &Func, param: Rc<Object>) -> errors::Result<Rc<Object>> {
-        let result = match &func {
+        match &func {
             Func::NativeFunc(inner) => inner(self, param),
             Func::UserDefFunc(_, _) => todo!(),
-        };
-        result
+        }
     }
     pub fn replace_instance(&self, mut instance: Rc<Instance>) -> Rc<Instance> {
         while let Some(repl) = self.scope.instance_replace.get(&instance) {

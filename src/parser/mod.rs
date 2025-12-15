@@ -32,7 +32,8 @@ fn statement<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Cl
                 .then_ignore(just(Token::Equal))
                 .then(expr.clone())
                 .map(move |((name, kind_like), e)| Rc::new(Expr::Def(name, e, kind_like))),
-            ident.then(just(Token::Colon).ignore_then(kind()).or_not())
+            ident
+                .then(just(Token::Colon).ignore_then(kind()).or_not())
                 .then_ignore(just(Token::Equal))
                 .then(expr.clone())
                 .map(move |((name, kind), e)| Expr::Let(name, e, kind).into()),
@@ -121,8 +122,7 @@ fn bin_ops<'stream>(
     let expr12 = infixl(expr11, just(Token::DoubleAmp));
     let expr13 = infixl(expr12, just(Token::DoublePipe));
     let expr14 = infixr(expr13, just(Token::PipeLeft));
-    let expr15 = infixl(expr14, just(Token::PipeRight));
-    expr15
+    infixl(expr14, just(Token::PipeRight))
 }
 fn infixl<'stream>(
     expr: impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone + 'stream,
@@ -174,12 +174,10 @@ fn kind<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Kind>> + Clone {
         let app = term
             .clone()
             .foldl(term.repeated(), |f, p| Rc::new(Kind::App(f, p)));
-        let arrow = app
-            .clone()
+        app.clone()
             .then_ignore(just(Token::SmallArrow))
             .repeated()
-            .foldr(app, |l, r| Rc::new(Kind::Arrow(l, r)));
-        arrow
+            .foldr(app, |l, r| Rc::new(Kind::Arrow(l, r)))
     })
 }
 fn kind_like<'a: 'stream, 'stream, 's: 'a + 'stream>()

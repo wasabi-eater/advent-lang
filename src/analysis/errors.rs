@@ -23,7 +23,7 @@ pub enum Error {
     IntegerOutOfSize(Rc<Expr>),
     MissingInstance {
         instance: Rc<crate::analysis::types::Instance>,
-    }
+    },
 }
 pub type Result<T> = std::result::Result<T, Error>;
 

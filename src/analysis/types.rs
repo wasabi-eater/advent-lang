@@ -155,7 +155,11 @@ impl TypeScheme {
         TypeScheme {
             bound_vars: self.bound_vars.clone(),
             ty: Rc::new(self.ty.subst(subst)),
-            constraints: self.constraints.iter().map(|instance| Rc::new(instance.subst(subst))).collect(),
+            constraints: self
+                .constraints
+                .iter()
+                .map(|instance| Rc::new(instance.subst(subst)))
+                .collect(),
         }
     }
 }
@@ -216,7 +220,14 @@ impl Instance {
         }
     }
     pub fn method_type_scheme(&self, method_name: &Rc<str>) -> Option<TypeScheme> {
-        Some(self.class.0.methods.get(method_name)?.clone().subst(&self.assigned_types_map()))
+        Some(
+            self.class
+                .0
+                .methods
+                .get(method_name)?
+                .clone()
+                .subst(&self.assigned_types_map()),
+        )
     }
     pub fn method_type_schemes(&self) -> FxHashMap<Rc<str>, TypeScheme> {
         let mut map = FxHashMap::default();

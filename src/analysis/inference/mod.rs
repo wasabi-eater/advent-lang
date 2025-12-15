@@ -3,7 +3,7 @@ pub mod test;
 pub mod typing;
 
 use fxhash::FxHashMap;
-use im_rc::{Vector, vector};
+use im_rc::Vector;
 use itertools::Itertools;
 
 use super::program_data::*;
@@ -33,6 +33,11 @@ impl Debug for TmpTyVarId {
 pub struct TmpTyVarArena {
     tmp_ty_vars: RefCell<Vec<TmpTyVar>>,
     group_ty: FxHashMap<TmpTyVarId, Typing>,
+}
+impl Default for TmpTyVarArena {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl TmpTyVarArena {
     pub fn new() -> Self {
@@ -215,6 +220,12 @@ struct ProgramDataBuilder {
     instances: im_rc::HashMap<TypeClassRef, Vector<Rc<Instance>>, fxhash::FxBuildHasher>,
 }
 
+impl Default for InferencePool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InferencePool {
     pub fn new() -> Self {
         let tyvar_arena = id_arena::Arena::new();
@@ -255,9 +266,7 @@ impl InferencePool {
         });
         self.extern_funcs
             .insert(name.clone(), (type_scheme.clone(), var_id));
-        self.scope
-            .vars
-            .insert(name, VarType::Def(type_scheme));
+        self.scope.vars.insert(name, VarType::Def(type_scheme));
         var_id
     }
     pub fn tyvar_arena(&mut self) -> &mut id_arena::Arena<TyVarBody> {
@@ -344,7 +353,7 @@ impl InferencePool {
                     &mut self.tmp_var_arena,
                     f.clone(),
                 )?;
-                Ok(Typing::TmpTyVar(tmp_id).into())
+                Ok(Typing::TmpTyVar(tmp_id))
             }
             Expr::BinOp(l, op, r) => {
                 let op_ident = Rc::new(Expr::Ident(op.binop_to_str().into()));
@@ -366,13 +375,13 @@ impl InferencePool {
             }
             Expr::Member(_, _) => todo!(),
             Expr::Ident(name) => {
-                if let Some(var_ty) = self.scope.vars.get(&*name) {
+                if let Some(var_ty) = self.scope.vars.get(name) {
                     match var_ty.clone() {
                         VarType::Def(type_scheme) => Ok(self.embody(&type_scheme)),
                         VarType::Annotated(ty) => Ok(Typing::from(&ty, &FxHashMap::default())),
                         VarType::Unannotated(typing) => Ok(typing.clone()),
                     }
-                } else if let Some(class) = self.method_classes.get(&*name) {
+                } else if let Some(class) = self.method_classes.get(name) {
                     let mut subst = FxHashMap::default();
                     for bound_var in &class.0.bound_vars {
                         subst.insert(
@@ -380,8 +389,8 @@ impl InferencePool {
                             Typing::TmpTyVar(self.tmp_var_arena.alloc_unassigned()),
                         );
                     }
-                    let type_scheme = &class.0.methods[&*name].clone();
-                    Ok(self.embody_with_subst(&type_scheme, subst))
+                    let type_scheme = &class.0.methods[name].clone();
+                    Ok(self.embody_with_subst(type_scheme, subst))
                 } else {
                     Err(errors::Error::UndefiedIdent(name.clone()))
                 }
@@ -429,7 +438,7 @@ impl InferencePool {
             ("Int".into(), Type::Int),
             ("Float".into(), Type::Float),
             ("String".into(), Type::String),
-            ("Bool".into(), Type::Bool)
+            ("Bool".into(), Type::Bool),
         ])
     }
     fn eval_kindlike(&mut self, kind_like: &ast::KindLike) -> errors::Result<TypeScheme> {
@@ -451,7 +460,7 @@ impl InferencePool {
             .map(|(name, ty_var)| (name, Type::Var(ty_var)))
             .collect();
         name_ty_map.extend(Self::std_defined_type_name());
-        let ty = self.eval_kind(&*kind_like.kind, &name_ty_map)?;
+        let ty = self.eval_kind(&kind_like.kind, &name_ty_map)?;
         Ok(TypeScheme {
             bound_vars: name_tyvar_map.into_values().collect(),
             ty: Rc::new(ty),
@@ -466,21 +475,19 @@ impl InferencePool {
         match kind {
             ast::Kind::App(_, _) => todo!(),
             ast::Kind::Arrow(l, r) => Ok(Type::Arrow(
-                Rc::new(self.eval_kind(&*l, name_ty_map)?),
-                Rc::new(self.eval_kind(&*r, name_ty_map)?),
+                Rc::new(self.eval_kind(l, name_ty_map)?),
+                Rc::new(self.eval_kind(r, name_ty_map)?),
             )),
             ast::Kind::Comma(l, r) => Ok(Type::Comma(
-                Rc::new(self.eval_kind(&*l, name_ty_map)?),
-                Rc::new(self.eval_kind(&*r, name_ty_map)?),
+                Rc::new(self.eval_kind(l, name_ty_map)?),
+                Rc::new(self.eval_kind(r, name_ty_map)?),
             )),
             ast::Kind::Ident(name) => name_ty_map
-                .get(&*name)
+                .get(name)
                 .cloned()
                 .ok_or_else(|| errors::Error::UndefiedIdent(name.clone())),
             ast::Kind::Unit => Ok(Type::Unit),
-            ast::Kind::List(inner) => {
-                Ok(Type::List(Rc::new(self.eval_kind(&*inner, name_ty_map)?)))
-            }
+            ast::Kind::List(inner) => Ok(Type::List(Rc::new(self.eval_kind(inner, name_ty_map)?))),
         }
     }
     pub fn create_program_data(mut self, expr: Rc<Expr>) -> errors::Result<ProgramData> {
@@ -509,7 +516,11 @@ impl InferencePool {
             expr_ident_ref: FxHashMap::default(),
             let_var_id: FxHashMap::default(),
             new_scope,
-            instances: self.instances.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            instances: self
+                .instances
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         };
         self.set_program_data(expr, &mut program_data_builder)?;
         Ok(ProgramData {
@@ -554,7 +565,8 @@ impl InferencePool {
                 Ok(())
             }
             Expr::Def(name, assigned_expr, _) => {
-                let VarType::Def(type_scheme) = self.let_type[&ExprRef(expr.clone())].clone() else {
+                let VarType::Def(type_scheme) = self.let_type[&ExprRef(expr.clone())].clone()
+                else {
                     panic!("unexpected var type");
                 };
                 let new_var_id = self.var_arena.alloc(VarData {
@@ -562,7 +574,7 @@ impl InferencePool {
                     ty: type_scheme.clone(),
                 });
                 let old_instances = program_data_builder.instances.clone();
-                for instance in &type_scheme.constraints{
+                for instance in &type_scheme.constraints {
                     program_data_builder
                         .instances
                         .entry(instance.class.clone())
@@ -612,9 +624,13 @@ impl InferencePool {
             Expr::Ident(name) => {
                 let typing = self.expr_typing[&ExprRef(expr.clone())].typing.clone();
                 let ty = typing.try_to_type(&mut self.tmp_var_arena)?;
-                if let Some((var_id, type_scheme)) = program_data_builder.new_scope.get(&*name) {
+                if let Some((var_id, type_scheme)) = program_data_builder.new_scope.get(name) {
                     let subst = type_scheme.assume_subst(&ty).unwrap();
-                    let given_instance: im_rc::HashMap<Rc<Instance>, Rc<Instance>, std::hash::BuildHasherDefault<fxhash::FxHasher>> = type_scheme
+                    let given_instance: im_rc::HashMap<
+                        Rc<Instance>,
+                        Rc<Instance>,
+                        std::hash::BuildHasherDefault<fxhash::FxHasher>,
+                    > = type_scheme
                         .constraints
                         .iter()
                         .map(|instance| (instance.clone(), Rc::new(instance.subst(&subst))))
@@ -626,35 +642,35 @@ impl InferencePool {
                         !program_data_builder
                             .instances
                             .get(&inst.class)
-                            .is_some_and(|instances| instances.contains(&inst))
+                            .is_some_and(|instances| instances.contains(inst))
                     }) {
-                        return Err(errors::Error::MissingInstance { instance: instance.clone() });
+                        return Err(errors::Error::MissingInstance {
+                            instance: instance.clone(),
+                        });
                     }
-                    program_data_builder
-                        .expr_ident_ref
-                        .insert(ExprRef(expr.clone()), IdentRef::Var(*var_id, given_instance));
+                    program_data_builder.expr_ident_ref.insert(
+                        ExprRef(expr.clone()),
+                        IdentRef::Var(*var_id, given_instance),
+                    );
                     return Ok(());
                 }
-                let Some(type_class) = self.method_classes.get(&*name) else {
+                let Some(type_class) = self.method_classes.get(name) else {
                     return Err(errors::Error::UndefiedIdent(name.clone()));
                 };
-                let method_type_scheme = type_class.0.methods[&*name].clone();
+                let method_type_scheme = type_class.0.methods[name].clone();
                 let Some(subst) = method_type_scheme.assume_subst(&ty) else {
                     return Err(errors::Error::UndefiedIdent(name.clone()));
                 };
 
                 let method_type_scheme = method_type_scheme.subst(&subst);
-                let candidates = self.instances[&type_class]
+                let candidates = self.instances[type_class]
                     .iter()
-                    .cloned()
                     .filter(|instance| {
-                        instance.method_type_scheme(name)
-                            .is_some_and(|method_scheme| {
-                                method_scheme
-                                    .assume_subst(&ty)
-                                    .is_some()
-                            })
+                        instance
+                            .method_type_scheme(name)
+                            .is_some_and(|method_scheme| method_scheme.assume_subst(&ty).is_some())
                     })
+                    .cloned()
                     .collect_vec();
                 match candidates.len() {
                     0 => {
@@ -669,25 +685,29 @@ impl InferencePool {
                         Err(errors::Error::MissingInstance {
                             instance: Rc::new(expeceted_instance),
                         })
-                    },
+                    }
                     1 => {
                         let candidate = candidates[0].clone();
-                        let method_type_scheme = candidate
-                            .method_type_scheme(name)
-                            .unwrap();
+                        let method_type_scheme = candidate.method_type_scheme(name).unwrap();
                         let subst = method_type_scheme.assume_subst(&ty).unwrap();
-                        let method_constraints: im_rc::HashMap<Rc<Instance>, Rc<Instance>, std::hash::BuildHasherDefault<fxhash::FxHasher>> = method_type_scheme
+                        let method_constraints: im_rc::HashMap<
+                            Rc<Instance>,
+                            Rc<Instance>,
+                            std::hash::BuildHasherDefault<fxhash::FxHasher>,
+                        > = method_type_scheme
                             .constraints
                             .iter()
                             .map(|instance| (instance.clone(), Rc::new(instance.subst(&subst))))
                             .collect();
                         if let Some(instance) = method_constraints.values().find(|&inst| {
-                        !program_data_builder
-                            .instances
-                            .get(&inst.class)
-                            .is_some_and(|instances| instances.contains(&inst))
+                            !program_data_builder
+                                .instances
+                                .get(&inst.class)
+                                .is_some_and(|instances| instances.contains(inst))
                         }) {
-                            return Err(errors::Error::MissingInstance { instance: instance.clone() });
+                            return Err(errors::Error::MissingInstance {
+                                instance: instance.clone(),
+                            });
                         }
                         program_data_builder.expr_ident_ref.insert(
                             ExprRef(expr.clone()),

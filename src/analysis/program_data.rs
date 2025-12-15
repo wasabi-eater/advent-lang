@@ -23,8 +23,15 @@ pub struct ProgramData {
 }
 #[derive(Clone, Debug)]
 pub enum IdentRef {
-    Var(VarId, im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>),
-    Method(Rc<Instance>, Rc<str>, im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>),
+    Var(
+        VarId,
+        im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>,
+    ),
+    Method(
+        Rc<Instance>,
+        Rc<str>,
+        im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>,
+    ),
 }
 #[derive(Clone, Debug)]
 pub struct ExprRef(pub Rc<Expr>);

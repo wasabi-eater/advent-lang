@@ -4,7 +4,7 @@ use crate::{
         program_data::VarId,
         types::{Instance, TyVarBody, Type, TypeClass, TypeClassRef, TypeScheme},
     },
-    runner::{self, core::Variable, obj::Object, obj::Func},
+    runner::{self, core::Variable, obj::Func, obj::Object},
 };
 use fxhash::FxHashMap;
 use im_rc::{HashMap, vector};
@@ -12,12 +12,12 @@ use im_rc::{HashMap, vector};
 macro_rules! native_func {
     ($runner_ident:ident, $p:pat => $body:expr) => {
         Object::Func(Func::NativeFunc(Rc::new(
-                move |$runner_ident: &mut runner::core::Runner, arg: Rc<runner::obj::Object>| {
-                    match &*arg {
-                        $p => $body,
-                        #[allow(unreachable_patterns)]
-                        _ => panic!("invalid argument type for native function"),
-                    }
+            move |$runner_ident: &mut runner::core::Runner, arg: Rc<runner::obj::Object>| {
+                match &*arg {
+                    $p => $body,
+                    #[allow(unreachable_patterns)]
+                    _ => panic!("invalid argument type for native function"),
+                }
             },
         )))
     };
@@ -48,7 +48,7 @@ use core::panic;
 use std::rc::Rc;
 pub struct StdLibDefiner<'a> {
     inference_pool: &'a mut InferencePool,
-    funcs: FxHashMap<VarId, (Rc<str>, TypeScheme,Variable)>,
+    funcs: FxHashMap<VarId, (Rc<str>, TypeScheme, Variable)>,
     instance_methods: FxHashMap<Rc<Instance>, FxHashMap<Rc<str>, Variable>>,
 }
 pub struct StdLib {
@@ -57,12 +57,11 @@ pub struct StdLib {
 }
 impl<'a> StdLibDefiner<'a> {
     pub fn new(inference_pool: &'a mut InferencePool) -> Self {
-        let stdlib = StdLibDefiner {
+        StdLibDefiner {
             inference_pool,
             funcs: FxHashMap::default(),
             instance_methods: FxHashMap::default(),
-        };
-        stdlib
+        }
     }
     fn def_type_class(&mut self, type_class: TypeClassRef) {
         self.inference_pool.extern_type_class(type_class);
@@ -80,7 +79,7 @@ impl<'a> StdLibDefiner<'a> {
         self.inference_pool.extern_instance(instance.clone());
         self.instance_methods.insert(
             instance.clone(),
-            FxHashMap::from_iter(type_class.0.methods.keys().map(|method_name|
+            FxHashMap::from_iter(type_class.0.methods.keys().map(|method_name| {
                 (
                     method_name.clone(),
                     method_bodys
@@ -89,7 +88,7 @@ impl<'a> StdLibDefiner<'a> {
                         .clone()
                         .into(),
                 )
-            ))
+            })),
         );
     }
     fn def_func(
@@ -105,7 +104,7 @@ impl<'a> StdLibDefiner<'a> {
             .extern_func(name.clone(), type_scheme.clone());
 
         self.funcs
-            .insert(var_id, (name, type_scheme.into(), obj.into()));
+            .insert(var_id, (name, type_scheme, obj.into()));
     }
     fn def_show_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
@@ -210,11 +209,11 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Int],
             &HashMap::from_iter([(
                 "+",
-                Rc::new(curry!([], _runner, 
+                Rc::new(curry!([], _runner,
                     (runner::obj::Object::Int(x), runner::obj::Object::Int(y)) => {
                         Ok(Rc::new(runner::obj::Object::Int(x + y)))
                     }
-                ))
+                )),
             )]),
         );
 
@@ -224,7 +223,7 @@ impl<'a> StdLibDefiner<'a> {
             [Type::Float],
             &HashMap::from_iter([(
                 "+",
-                Rc::new(curry!([], _runner, 
+                Rc::new(curry!([], _runner,
                     (runner::obj::Object::Float(x), runner::obj::Object::Float(y)) => {
                         Ok(Rc::new(runner::obj::Object::Float(x + y)))
                     }
@@ -296,7 +295,7 @@ impl<'a> StdLibDefiner<'a> {
                 "-",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Int(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Int(y) => {
                                 Ok(Rc::new(runner::obj::Object::Int(x - y)))
@@ -315,7 +314,7 @@ impl<'a> StdLibDefiner<'a> {
                 "-",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Float(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Float(y) => {
                                 Ok(Rc::new(runner::obj::Object::Float(x - y)))
@@ -349,7 +348,7 @@ impl<'a> StdLibDefiner<'a> {
                 "*",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Int(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Int(y) => {
                                 Ok(Rc::new(runner::obj::Object::Int(x * y)))
@@ -367,7 +366,7 @@ impl<'a> StdLibDefiner<'a> {
                 "*",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Float(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Float(y) => {
                                 Ok(Rc::new(runner::obj::Object::Float(x * y)))
@@ -401,7 +400,7 @@ impl<'a> StdLibDefiner<'a> {
                 "/",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Int(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Int(y) => {
                                 Ok(Rc::new(runner::obj::Object::Int(x / y)))
@@ -419,7 +418,7 @@ impl<'a> StdLibDefiner<'a> {
                 "/",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Float(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Float(y) => {
                                 Ok(Rc::new(runner::obj::Object::Float(x / y)))
@@ -453,7 +452,7 @@ impl<'a> StdLibDefiner<'a> {
                 "%",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Int(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Int(y) => {
                                 Ok(Rc::new(runner::obj::Object::Int(x % y)))
@@ -471,7 +470,7 @@ impl<'a> StdLibDefiner<'a> {
                 "%",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Float(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Float(y) => {
                                 Ok(Rc::new(runner::obj::Object::Float(x % y)))
@@ -583,7 +582,7 @@ impl<'a> StdLibDefiner<'a> {
                 "&",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Bool(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Bool(y) => {
                                 Ok(Rc::new(runner::obj::Object::Bool(x & y)))
@@ -601,7 +600,7 @@ impl<'a> StdLibDefiner<'a> {
                 "&",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Int(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Int(y) => {
                                 Ok(Rc::new(runner::obj::Object::Int(x & y)))
@@ -635,7 +634,7 @@ impl<'a> StdLibDefiner<'a> {
                 "|",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Bool(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Bool(y) => {
                                 Ok(Rc::new(runner::obj::Object::Bool(x | y)))
@@ -653,7 +652,7 @@ impl<'a> StdLibDefiner<'a> {
                 "|",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Int(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Int(y) => {
                                 Ok(Rc::new(runner::obj::Object::Int(x | y)))
@@ -680,15 +679,16 @@ impl<'a> StdLibDefiner<'a> {
         self.def_type_class(eq_class.clone());
 
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let constraint = Rc::new(Instance{
+        let constraint = Rc::new(Instance {
             class: eq_class.clone(),
-            assigned_types: vector![Type::Var(a)]
+            assigned_types: vector![Type::Var(a)],
         });
-        self.def_func("!=",
+        self.def_func(
+            "!=",
             TypeScheme::forall_with_constraints(
                 [a],
                 Type::arrow(Type::Var(a), Type::arrow(Type::Var(a), Type::Bool)),
-                [constraint.clone()]
+                [constraint.clone()],
             ),
             Variable::Def(Rc::new(move |_, instance_replace| {
                 let eq_instance = instance_replace[&constraint.clone()].clone();
@@ -699,10 +699,10 @@ impl<'a> StdLibDefiner<'a> {
                         let Object::Func(eq_func) = &*eq_func else {
                             panic!("Eq::== is not a Func")
                         };
-                        let Object::Func(f) = &*runner.call(&eq_func, Rc::new(l))? else {
+                        let Object::Func(f) = &*runner.call(eq_func, Rc::new(l))? else {
                             panic!("Eq::== did not return a Func")
                         };
-                        let eq_result = runner.call(&f, Rc::new(r))?;
+                        let eq_result = runner.call(f, Rc::new(r))?;
                         match &*eq_result {
                             runner::obj::Object::Bool(b) => {
                                 Ok(Rc::new(runner::obj::Object::Bool(!b)))
@@ -711,7 +711,7 @@ impl<'a> StdLibDefiner<'a> {
                         }
                     }
                 )))
-            }))
+            })),
         );
 
         // Eq for Int
@@ -722,7 +722,7 @@ impl<'a> StdLibDefiner<'a> {
                 "==",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Int(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Int(y) => {
                                 Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
@@ -740,7 +740,7 @@ impl<'a> StdLibDefiner<'a> {
                 "==",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Float(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Float(y) => {
                                 Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
@@ -758,7 +758,7 @@ impl<'a> StdLibDefiner<'a> {
                 "==",
                 Rc::new(native_func!(_runner,
                     runner::obj::Object::Bool(x) => {
-                        let x = x.clone();
+                        let x = *x;
                         Ok(Rc::new(native_func!(_runner,
                             runner::obj::Object::Bool(y) => {
                                 Ok(Rc::new(runner::obj::Object::Bool(x == *y)))
@@ -1036,7 +1036,7 @@ impl<'a> StdLibDefiner<'a> {
                     Ok(Rc::new(
                         native_func!(_runner,
                             runner::obj::Object::Func(f) => {
-                                let result = _runner.call(&f, Rc::new(arg.clone()))?;
+                                let result = _runner.call(f, Rc::new(arg.clone()))?;
                                 Ok(result)
                             }
                         )
@@ -1174,6 +1174,9 @@ impl<'a> StdLibDefiner<'a> {
         self.def_func_functions();
         self.def_comma_functions();
         self.def_io_functions();
-        StdLib { extern_funcs: self.funcs, instance_methods: self.instance_methods }
+        StdLib {
+            extern_funcs: self.funcs,
+            instance_methods: self.instance_methods,
+        }
     }
 }

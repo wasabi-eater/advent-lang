@@ -49,6 +49,8 @@ fn expr<'stream>(
             Token::Int(n) => Expr::LitInt(n),
             Token::Float(n) => Expr::LitFloat(n),
             Token::Str(s) => Expr::LitStr(s),
+            Token::True => Expr::LitBool(true),
+            Token::False => Expr::LitBool(false),
         }
         .map(Rc::new);
         let ident = select! {

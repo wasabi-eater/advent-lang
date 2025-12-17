@@ -119,6 +119,7 @@ impl Runner {
             Expr::LitInt(n) => Ok(Rc::new(Object::Int(n.parse().unwrap()))),
             Expr::LitFloat(n) => Ok(Rc::new(Object::Float(n.parse().unwrap()))),
             Expr::LitStr(s) => Ok(Rc::new(Object::String(Rc::new(s.to_string())))),
+            Expr::LitBool(b) => Ok(Rc::new(Object::Bool(*b))),
             Expr::AppFun(f, p) => {
                 let func = self.eval(f.clone())?;
                 let Object::Func(func) = &*func else {

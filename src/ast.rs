@@ -9,6 +9,7 @@ pub enum Expr {
     LitFloat(Rc<str>),
     LitStr(Rc<str>),
     LitList(Vec<Rc<Expr>>),
+    LitBool(bool),
     AppFun(Rc<Expr>, Rc<Expr>),
     BinOp(Rc<Expr>, Token, Rc<Expr>),
     UnOp(Token, Rc<Expr>),
@@ -46,6 +47,7 @@ impl Debug for Expr {
             Expr::LitInt(i) => write!(f, "{i}"),
             Expr::LitFloat(fl) => write!(f, "{fl}"),
             Expr::LitStr(s) => write!(f, "\"{s}\""),
+            Expr::LitBool(b) => write!(f, "{b}"),
             Expr::LitList(list) => {
                 f.write_str("[")?;
                 let mut is_first = true;

@@ -334,6 +334,7 @@ impl InferencePool {
             Expr::LitFloat(_) => Ok(Typing::Float),
             Expr::LitStr(_) => Ok(Typing::String),
             Expr::Unit => Ok(Typing::Unit),
+            Expr::LitBool(_) => Ok(Typing::Bool),
             Expr::LitList(items) => {
                 let inner_id = self.tmp_var_arena.alloc_unassigned();
                 for item in items {
@@ -588,7 +589,7 @@ impl InferencePool {
             return self.set_program_data(desugared.clone(), program_data_builder);
         }
         match &*expr {
-            Expr::LitInt(_) | Expr::LitFloat(_) | Expr::LitStr(_) | Expr::Unit => Ok(()),
+            Expr::LitInt(_) | Expr::LitFloat(_) | Expr::LitStr(_) | Expr::Unit | Expr::LitBool(_) => Ok(()),
             Expr::LitList(items) => {
                 for item in items {
                     self.set_program_data(item.clone(), program_data_builder)?;

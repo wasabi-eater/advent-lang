@@ -1321,6 +1321,35 @@ impl<'a> StdLibDefiner<'a> {
                 }
             ),
         );
+
+        let type_scheme = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            TypeScheme::forall(
+                [a],
+                Type::arrow(
+                    Type::Bool,
+                    Type::arrow(
+                        Type::arrow(Type::Unit, Type::Var(a)),
+                        Type::arrow(
+                            Type::arrow(Type::Unit, Type::Var(a)),
+                             Type::Var(a))
+                    )
+                )
+            )
+        };
+        self.def_func(
+            "if",
+            type_scheme,
+            curry3!([], runner,
+                (Object::Bool(cond), Object::Func(then_branch), Object::Func(else_branch)) => {
+                    if cond {
+                        runner.call(&then_branch, Rc::new(Object::Unit))
+                    } else {
+                        runner.call(&else_branch, Rc::new(Object::Unit))
+                    }
+                }
+            ),
+        )
     }
     pub fn def_comma_functions(&mut self) {
         let type_sheme = {

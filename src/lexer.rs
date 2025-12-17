@@ -89,6 +89,8 @@ pub enum Token {
     Ident(Rc<str>),
     Forall,
     Def,
+    True,
+    False
 }
 
 pub fn tokenize(src: &str) -> Option<Vec<Token>> {
@@ -96,6 +98,8 @@ pub fn tokenize(src: &str) -> Option<Vec<Token>> {
         .map_ok(|token| match token {
             Token::Ident(word) if &*word == "forall" => Token::Forall,
             Token::Ident(word) if &*word == "def" => Token::Def,
+            Token::Ident(word) if &*word == "true" => Token::True,
+            Token::Ident(word) if &*word == "false" => Token::False,
             other => other,
         })
         .try_collect()

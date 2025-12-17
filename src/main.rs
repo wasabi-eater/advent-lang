@@ -6,7 +6,7 @@ use indoc::indoc;
 
 fn main() {
     let src = indoc! {r#"
-    3 != 3 |> show |> print;
+    zip [0, 2, 3] ["zero", "two", "three"] |> show .> print;
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");

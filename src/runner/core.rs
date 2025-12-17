@@ -5,9 +5,8 @@ use fxhash::FxHashMap;
 use itertools::Itertools;
 
 use crate::{
-    analysis::{
-        program_data::{ExprRef, IdentRef, ProgramData, VarId},
-        types::Instance,
+    analysis::program_data::{
+        ConstraintAssign, ExprRef, IdentRef, InstanceDefId, InstanceRef, ProgramData, VarId,
     },
     ast::Expr,
     runner::obj::Func,
@@ -17,14 +16,10 @@ use crate::{
 pub struct Runner {
     program_data: ProgramData,
     scope: Scope,
-    pub instance_methods: FxHashMap<Rc<Instance>, FxHashMap<Rc<str>, Variable>>,
+    pub instance_body_cache: FxHashMap<InstanceRef, Rc<InstanceBody>>,
+    pub instance_body_definers: FxHashMap<InstanceDefId, InstanceDefiner>,
 }
-pub type DefInner = Rc<
-    dyn Fn(
-        &mut Runner,
-        im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>,
-    ) -> errors::Result<Rc<Object>>,
->;
+pub type DefInner = Rc<dyn Fn(&mut Runner, ConstraintAssign) -> errors::Result<Rc<Object>>>;
 #[derive(Clone)]
 pub enum Variable {
     Var(Rc<Object>),
@@ -41,10 +36,18 @@ impl From<Object> for Variable {
     }
 }
 
+pub struct InstanceBody {
+    pub methods: FxHashMap<Rc<str>, Variable>,
+}
+pub enum InstanceDefiner {
+    Just(Rc<InstanceBody>),
+    WithConstraintAssign(Rc<dyn Fn(&mut Runner, ConstraintAssign) -> Rc<InstanceBody>>),
+}
+
 #[derive(Default, Clone)]
 pub struct Scope {
     vars: im_rc::HashMap<VarId, Variable, fxhash::FxBuildHasher>,
-    instance_replace: im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>,
+    instance_replace: ConstraintAssign,
 }
 
 impl Runner {
@@ -57,15 +60,16 @@ impl Runner {
                     .into_iter()
                     .map(|(var_id, (_, _, obj))| (var_id, obj))
                     .collect(),
-                instance_replace: im_rc::HashMap::default(),
+                instance_replace: ConstraintAssign::default(),
             },
-            instance_methods: std_lib.instance_methods,
+            instance_body_cache: FxHashMap::default(),
+            instance_body_definers: std_lib.instance_body_definers,
         }
     }
     pub fn read_var(
         &mut self,
         variable: &Variable,
-        given_instance: im_rc::HashMap<Rc<Instance>, Rc<Instance>, fxhash::FxBuildHasher>,
+        given_instance: ConstraintAssign,
     ) -> errors::Result<Rc<Object>> {
         match variable {
             Variable::Var(obj) => Ok(obj.clone()),
@@ -103,15 +107,15 @@ impl Runner {
                         let data = self.scope.vars[&var_id].clone();
                         (data, given_instance)
                     }
-                    IdentRef::Method(instance, method_name, given_instance) => {
-                        let data = self.instance_methods[&instance][&method_name].clone();
+                    IdentRef::Method(mut instance, method_name, given_instance) => {
+                        self.replace_instance(&mut instance);
+                        let instance_body = self.get_instance_body(instance.clone());
+                        let data = instance_body.methods[&method_name].clone();
                         (data, given_instance)
                     }
                 };
                 for (_, to) in given_instance.iter_mut() {
-                    if let Some(repl) = self.scope.instance_replace.get(&to.clone()) {
-                        *to = repl.clone();
-                    }
+                    self.replace_instance(to);
                 }
                 let data = self.read_var(&data, given_instance)?;
                 Ok(data)
@@ -159,10 +163,37 @@ impl Runner {
             Func::UserDefFunc(_, _) => todo!(),
         }
     }
-    pub fn replace_instance(&self, mut instance: Rc<Instance>) -> Rc<Instance> {
-        while let Some(repl) = self.scope.instance_replace.get(&instance) {
-            instance = repl.clone();
+    pub fn replace_instance(&self, instance_ref: &mut InstanceRef) {
+        match instance_ref {
+            InstanceRef::Given(constraint_id) => {
+                if let Some(repl) = self.scope.instance_replace.get(constraint_id) {
+                    *instance_ref = repl.clone();
+                } else {
+                    panic!("instance not found in replace map")
+                }
+            }
+            InstanceRef::Def(_, constraint_assign) => {
+                let mut constraint_assign = constraint_assign.clone();
+                for (_, to) in constraint_assign.iter_mut() {
+                    self.replace_instance(to);
+                }
+            }
         }
-        instance
+    }
+    pub fn get_instance_body(&mut self, mut instance_ref: InstanceRef) -> Rc<InstanceBody> {
+        self.replace_instance(&mut instance_ref);
+        if let Some(body) = self.instance_body_cache.get(&instance_ref) {
+            return body.clone();
+        }
+        let InstanceRef::Def(def_id, constraint_assign) = &instance_ref else {
+            panic!("expected InstanceRef::Def")
+        };
+        let definer = &self.instance_body_definers[def_id];
+        let body = match definer {
+            InstanceDefiner::Just(body) => body.clone(),
+            InstanceDefiner::WithConstraintAssign(f) => f.clone()(self, constraint_assign.clone()),
+        };
+        self.instance_body_cache.insert(instance_ref, body.clone());
+        body
     }
 }

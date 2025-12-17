@@ -1,23 +1,27 @@
 use crate::{
     analysis::{
         inference::InferencePool,
-        program_data::VarId,
-        types::{Instance, TyVarBody, Type, TypeClass, TypeClassRef, TypeScheme},
+        program_data::{Constraint, ConstraintId, InstanceDef, InstanceDefId, VarId},
+        types::{
+            Instance, InstanceScheme, TyVar, TyVarBody, Type, TypeClass, TypeClassRef, TypeScheme,
+        },
     },
-    runner::{core::Runner, core::Variable, obj::Func, obj::Object},
+    runner::{
+        core::{InstanceBody, InstanceDefiner, Runner, Variable},
+        obj::{Func, Object},
+    },
 };
 use fxhash::FxHashMap;
-use im_rc::{HashMap, vector};
+use im_rc::{Vector, vector};
+use itertools::Itertools;
 
 macro_rules! native_func {
     ($runner_ident:ident, $p:pat => $body:expr) => {
         Object::Func(Func::NativeFunc(Rc::new(
-            move |$runner_ident: &mut Runner, arg: Rc<Object>| {
-                match &*arg {
-                    $p => $body,
-                    #[allow(unreachable_patterns)]
-                    _ => panic!("invalid argument type for native function"),
-                }
+            move |$runner_ident: &mut Runner, arg: Rc<Object>| match &*arg {
+                $p => $body,
+                #[allow(unreachable_patterns)]
+                _ => panic!("invalid argument type for native function"),
             },
         )))
     };
@@ -44,23 +48,90 @@ macro_rules! curry {
     };
 }
 
+struct TypeClassBuilder {
+    name: Rc<str>,
+    bound_vars: Vec<TyVar>,
+    methods: FxHashMap<Rc<str>, TypeScheme>,
+    method_constraint_ids: FxHashMap<Rc<str>, Vec<ConstraintId>>,
+}
+impl TypeClassBuilder {
+    fn new(name: impl Into<Rc<str>>, bound_vars: Vec<TyVar>) -> Self {
+        Self {
+            name: name.into(),
+            bound_vars,
+            methods: FxHashMap::default(),
+            method_constraint_ids: FxHashMap::default(),
+        }
+    }
+
+    fn method(
+        mut self,
+        name: impl Into<Rc<str>>,
+        type_scheme: TypeScheme,
+        constraint_ids: Vec<ConstraintId>,
+    ) -> Self {
+        let name = name.into();
+        self.methods.insert(name.clone(), type_scheme);
+        self.method_constraint_ids.insert(name, constraint_ids);
+        self
+    }
+
+    fn build(self) -> TypeClassRef {
+        TypeClassRef(Rc::new(TypeClass {
+            name: self.name,
+            bound_vars: self.bound_vars,
+            methods: self.methods,
+            method_constraint_ids: self.method_constraint_ids,
+        }))
+    }
+}
+struct InstanceBodyBuilder {
+    instance: Rc<Instance>,
+    method_bodys: FxHashMap<Rc<str>, Variable>,
+}
+impl InstanceBodyBuilder {
+    fn new(instance: Rc<Instance>) -> Self {
+        Self {
+            instance,
+            method_bodys: FxHashMap::default(),
+        }
+    }
+
+    fn method_body(mut self, name: impl Into<Rc<str>>, body: impl Into<Variable>) -> Self {
+        self.method_bodys.insert(name.into(), body.into());
+        self
+    }
+
+    fn build(self) -> InstanceBody {
+        assert!(self.method_bodys.len() == self.instance.class.0.methods.len());
+        assert!(
+            self.method_bodys
+                .keys()
+                .all(|name| self.instance.class.0.methods.contains_key(name))
+        );
+        InstanceBody {
+            methods: self.method_bodys,
+        }
+    }
+}
+
 use core::panic;
 use std::rc::Rc;
 pub struct StdLibDefiner<'a> {
     inference_pool: &'a mut InferencePool,
     funcs: FxHashMap<VarId, (Rc<str>, TypeScheme, Variable)>,
-    instance_methods: FxHashMap<Rc<Instance>, FxHashMap<Rc<str>, Variable>>,
+    instance_body_definers: FxHashMap<InstanceDefId, InstanceDefiner>,
 }
 pub struct StdLib {
     pub extern_funcs: FxHashMap<VarId, (Rc<str>, TypeScheme, Variable)>,
-    pub instance_methods: FxHashMap<Rc<Instance>, FxHashMap<Rc<str>, Variable>>,
+    pub instance_body_definers: FxHashMap<InstanceDefId, InstanceDefiner>,
 }
 impl<'a> StdLibDefiner<'a> {
     pub fn new(inference_pool: &'a mut InferencePool) -> Self {
         StdLibDefiner {
             inference_pool,
             funcs: FxHashMap::default(),
-            instance_methods: FxHashMap::default(),
+            instance_body_definers: FxHashMap::default(),
         }
     }
     fn def_type_class(&mut self, type_class: TypeClassRef) {
@@ -70,24 +141,91 @@ impl<'a> StdLibDefiner<'a> {
         &mut self,
         type_class: TypeClassRef,
         assigned_types: impl IntoIterator<Item = Type>,
-        method_bodys: &HashMap<&'static str, impl Into<Variable> + Clone>,
+        instance_body: impl FnOnce(Rc<Instance>) -> InstanceBody,
     ) {
         let instance = Rc::new(Instance {
             class: type_class.clone(),
             assigned_types: assigned_types.into_iter().collect(),
         });
-        self.inference_pool.extern_instance(instance.clone());
-        self.instance_methods.insert(
-            instance.clone(),
-            FxHashMap::from_iter(type_class.0.methods.keys().map(|method_name| {
-                (
-                    method_name.clone(),
-                    method_bodys
-                        .get(&**method_name)
-                        .expect("method body not provided")
-                        .clone()
-                        .into(),
-                )
+        let instance_def = InstanceDef {
+            scheme: InstanceScheme {
+                instance: instance.clone(),
+                bound_vars: vector![],
+                constraints: vector![],
+            },
+            constraints: vec![],
+        };
+        let instance_def_id = self.inference_pool.extern_instance(instance_def);
+        self.instance_body_definers.insert(
+            instance_def_id,
+            InstanceDefiner::Just(Rc::new(instance_body(instance))),
+        );
+    }
+    fn def_instance_scheme_without_constraints(
+        &mut self,
+        type_class: TypeClassRef,
+        assigned_types: impl IntoIterator<Item = Type>,
+        bound_vars: impl IntoIterator<Item = TyVar>,
+        instance_body: impl FnOnce(Rc<Instance>) -> InstanceBody,
+    ) {
+        let instance = Rc::new(Instance {
+            class: type_class.clone(),
+            assigned_types: assigned_types.into_iter().collect(),
+        });
+        let instance_def = InstanceDef {
+            scheme: InstanceScheme {
+                instance: instance.clone(),
+                bound_vars: bound_vars.into_iter().collect(),
+                constraints: vector![],
+            },
+            constraints: vec![],
+        };
+        let instance_def_id = self.inference_pool.extern_instance(instance_def);
+        self.instance_body_definers.insert(
+            instance_def_id,
+            InstanceDefiner::Just(Rc::new(instance_body(instance))),
+        );
+    }
+    fn def_instance_with_constraints(
+        &mut self,
+        type_class: TypeClassRef,
+        assigned_types: impl IntoIterator<Item = Type>,
+        bound_ty_vars: impl IntoIterator<Item = TyVar>,
+        constraints: impl IntoIterator<Item = Rc<Instance>>,
+        instance_body: impl Fn(Rc<Instance>, &mut Runner, Vec<Rc<InstanceBody>>) -> InstanceBody
+        + 'static,
+    ) {
+        let instance = Rc::new(Instance {
+            class: type_class.clone(),
+            assigned_types: assigned_types.into_iter().collect(),
+        });
+        let constraints = constraints.into_iter().collect::<Vector<Rc<Instance>>>();
+        let constraint_ids = constraints
+            .iter()
+            .cloned()
+            .map(|instance| {
+                self.inference_pool
+                    .alloc_constraint(Constraint { instance })
+            })
+            .collect_vec();
+        let instance_def = InstanceDef {
+            scheme: InstanceScheme {
+                instance: instance.clone(),
+                bound_vars: bound_ty_vars.into_iter().collect(),
+                constraints,
+            },
+            constraints: constraint_ids.clone().into_iter().collect(),
+        };
+        let instance_def_id = self.inference_pool.extern_instance(instance_def);
+        self.instance_body_definers.insert(
+            instance_def_id,
+            InstanceDefiner::WithConstraintAssign(Rc::new(move |runner, constraint_assign| {
+                let assigned_instances = constraint_ids
+                    .iter()
+                    .map(|cid| constraint_assign.get(cid).unwrap().clone())
+                    .map(|inst_ref| runner.get_instance_body(inst_ref))
+                    .collect_vec();
+                Rc::new(instance_body(instance.clone(), runner, assigned_instances))
             })),
         );
     }
@@ -95,514 +233,660 @@ impl<'a> StdLibDefiner<'a> {
         &mut self,
         name: impl Into<Rc<str>>,
         type_scheme: impl Into<TypeScheme>,
-        obj: impl Into<Variable>,
+        obj: impl Into<Rc<Object>>,
     ) {
         let name = name.into();
         let type_scheme = type_scheme.into();
+        let obj = obj.into();
         let var_id = self
             .inference_pool
-            .extern_func(name.clone(), type_scheme.clone());
+            .extern_func(name.clone(), type_scheme.clone(), vector![]);
 
         self.funcs.insert(var_id, (name, type_scheme, obj.into()));
     }
+    fn def_func_with_constraints(
+        &mut self,
+        name: impl Into<Rc<str>>,
+        type_scheme: impl Into<TypeScheme>,
+        obj: impl Fn(&mut Runner, Vec<Rc<InstanceBody>>) -> Rc<Object> + 'static,
+    ) {
+        let name = name.into();
+        let type_scheme = type_scheme.into();
+
+        let constraint_ids = type_scheme
+            .constraints
+            .iter()
+            .cloned()
+            .map(|instance| {
+                self.inference_pool
+                    .alloc_constraint(Constraint { instance })
+            })
+            .collect::<Vector<ConstraintId>>();
+
+        let var_id = self.inference_pool.extern_func(
+            name.clone(),
+            type_scheme.clone(),
+            constraint_ids.clone(),
+        );
+
+        self.funcs.insert(
+            var_id,
+            (
+                name,
+                type_scheme,
+                Variable::Def(Rc::new(move |runner: &mut Runner, instance_replace| {
+                    let assigned_instances = constraint_ids
+                        .iter()
+                        .map(|cid| {
+                            instance_replace
+                                .get(cid)
+                                .expect("instance not found in replace map")
+                                .clone()
+                        })
+                        .map(|inst_ref| runner.get_instance_body(inst_ref))
+                        .collect_vec();
+                    Ok(obj(runner, assigned_instances))
+                })),
+            ),
+        );
+    }
     fn def_show_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let show_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Show".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "show".into(),
-                TypeScheme::forall([a], Type::arrow(Type::Var(a), Type::String)),
-            )]),
-        }));
+        let show_class = TypeClassBuilder::new("Show", vec![a])
+            .method(
+                "show",
+                TypeScheme::forall([], Type::arrow(Type::Var(a), Type::String)),
+                vec![],
+            )
+            .build();
         self.def_type_class(show_class.clone());
 
         // Show for Int
-        self.def_instance(
-            show_class.clone(),
-            [Type::Int],
-            &HashMap::from_iter([(
-                "show",
-                Rc::new(native_func!(_runner,
-                    Object::Int(n) => {
-                        Ok(Rc::new(Object::String(Rc::new(n.to_string()))))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(show_class.clone(), [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "show",
+                    native_func!(_runner,
+                        Object::Int(n) => {
+                            Ok(Rc::new(Object::String(Rc::new(n.to_string()))))
+                        }
+                    ),
+                )
+                .build()
+        });
 
         //Show for Float
-        self.def_instance(
-            show_class.clone(),
-            [Type::Float],
-            &HashMap::from_iter([(
-                "show",
-                Rc::new(native_func!(_runner,
-                    Object::Float(n) => {
-                        Ok(Rc::new(Object::String(Rc::new(n.to_string()))))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(show_class.clone(), [Type::Float], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "show",
+                    native_func!(_runner,
+                        Object::Float(n) => {
+                            Ok(Rc::new(Object::String(Rc::new(n.to_string()))))
+                        }
+                    ),
+                )
+                .build()
+        });
 
         //Show for Bool
-        self.def_instance(
-            show_class.clone(),
-            [Type::Bool],
-            &HashMap::from_iter([(
-                "show",
-                Rc::new(native_func!(_runner,
-                    Object::Bool(b) => {
-                        Ok(Rc::new(Object::String(Rc::new(b.to_string()))))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(show_class.clone(), [Type::Bool], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "show",
+                    native_func!(_runner,
+                        Object::Bool(b) => {
+                            Ok(Rc::new(Object::String(Rc::new(b.to_string()))))
+                        }
+                    ),
+                )
+                .build()
+        });
 
         // Show for String
-        self.def_instance(
-            show_class.clone(),
-            [Type::String],
-            &HashMap::from_iter([(
-                "show",
-                Rc::new(native_func!(_runner,
-                    Object::String(s) => {
-                        Ok(Rc::new(Object::String(s.clone())))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(show_class.clone(), [Type::String], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "show",
+                    native_func!(_runner,
+                        Object::String(s) => {
+                            Ok(Rc::new(Object::String(s.clone())))
+                        }
+                    ),
+                )
+                .build()
+        });
 
         // Show for Unit
-        self.def_instance(
-            show_class,
-            [Type::Unit],
-            &HashMap::from_iter([(
-                "show",
-                Rc::new(native_func!(_runner,
-                    Object::Unit => {
-                        Ok(Rc::new(Object::String(Rc::new("()".to_string()))))
-                    }
-                )),
-            )]),
+        self.def_instance(show_class.clone(), [Type::Unit], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "show",
+                    native_func!(_runner,
+                        Object::Unit => {
+                            Ok(Rc::new(Object::String(Rc::new("()".into()))))
+                        }
+                    ),
+                )
+                .build()
+        });
+
+        // Show for List
+        let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+        self.def_instance_with_constraints(
+            show_class.clone(),
+            [Type::List(Type::Var(b).into())],
+            [b],
+            [Instance {
+                class: show_class.clone(),
+                assigned_types: vector![Type::Var(b)],
+            }
+            .into()],
+            |instance, runner, constraints| {
+                let show_b_body = constraints[0].methods["show"].clone();
+                let show_func = runner
+                    .read_var(&show_b_body, im_rc::HashMap::default())
+                    .unwrap();
+                let Object::Func(show_b) = &*show_func else {
+                    panic!("expected function for show method")
+                };
+                let show_b = show_b.clone();
+                InstanceBodyBuilder::new(instance)
+                    .method_body(
+                        "show",
+                        Variable::Var(Rc::new(native_func!(runner,
+                            Object::List(list) => {
+                                let mut s = String::from("[");
+                                for (i, item) in list.iter().enumerate() {
+                                    let shown_item = runner.call(&show_b, item.clone())?;
+                                    let Object::String(shown_item) = &*shown_item else {
+                                        panic!("expected String from show method")
+                                    };
+                                    if i == 0 {
+                                        s.push_str(shown_item);
+                                    } else {
+                                        s.push_str(", ");
+                                        s.push_str(shown_item);
+                                    }
+                                }
+                                s.push(']');
+                                Ok(Rc::new(Object::String(Rc::new(s))))
+                            }
+                        ))),
+                    )
+                    .build()
+            },
+        );
+
+        // Show for Comma
+        let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+        let c = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("c"));
+        self.def_instance_with_constraints(
+            show_class.clone(),
+            [Type::Comma(Type::Var(b).into(), Type::Var(c).into())],
+            [b, c],
+            [
+                Instance {
+                    class: show_class.clone(),
+                    assigned_types: vector![Type::Var(b)],
+                }
+                .into(),
+                Instance {
+                    class: show_class.clone(),
+                    assigned_types: vector![Type::Var(c)],
+                }
+                .into(),
+            ],
+            |instance, runner, constraints| {
+                let show_b_body = constraints[0].methods["show"].clone();
+                let show_c_body = constraints[1].methods["show"].clone();
+                let show_b_func = runner
+                    .read_var(&show_b_body, im_rc::HashMap::default())
+                    .unwrap();
+                let show_c_func = runner
+                    .read_var(&show_c_body, im_rc::HashMap::default())
+                    .unwrap();
+                let Object::Func(show_b) = &*show_b_func else {
+                    panic!("expected function for show method")
+                };
+                let Object::Func(show_c) = &*show_c_func else {
+                    panic!("expected function for show method")
+                };
+                let show_b = show_b.clone();
+                let show_c = show_c.clone();
+                InstanceBodyBuilder::new(instance)
+                    .method_body(
+                        "show",
+                        Variable::Var(Rc::new(native_func!(runner,
+                            Object::Comma(l, r) => {
+                                let shown_l = runner.call(&show_b, l.clone())?;
+                                let shown_r = runner.call(&show_c, r.clone())?;
+                                let Object::String(shown_l) = &*shown_l else {
+                                    panic!("expected String from show method")
+                                };
+                                let Object::String(shown_r) = &*shown_r else {
+                                    panic!("expected String from show method")
+                                };
+                                Ok(Rc::new(Object::String(Rc::new(format!("({}, {})", shown_l, shown_r)))))
+                            }
+                        ))),
+                    )
+                    .build()
+            }
         );
     }
     fn def_add_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let add_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Add".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "+".into(),
+        let add_class = TypeClassBuilder::new("Add", vec![a])
+            .method(
+                "+",
                 TypeScheme::forall(
-                    [a],
+                    [],
                     Type::arrow(Type::Var(a), Type::arrow(Type::Var(a), Type::Var(a))),
                 ),
-            )]),
-        }));
+                vec![],
+            )
+            .build();
         self.def_type_class(add_class.clone());
 
         // Add for Int
-        self.def_instance(
-            add_class.clone(),
-            [Type::Int],
-            &HashMap::from_iter([(
-                "+",
-                Rc::new(curry!([], _runner,
-                    (Object::Int(x), Object::Int(y)) => {
-                        Ok(Rc::new(Object::Int(x + y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(add_class.clone(), [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "+",
+                    Rc::new(curry!([], _runner,
+                        (Object::Int(x), Object::Int(y)) => {
+                            Ok(Rc::new(Object::Int(x + y)))
+                        }
+                    )),
+                )
+                .build()
+        });
 
         // Add for Float
-        self.def_instance(
-            add_class.clone(),
-            [Type::Float],
-            &HashMap::from_iter([(
-                "+",
-                Rc::new(curry!([], _runner,
-                    (Object::Float(x), Object::Float(y)) => {
-                        Ok(Rc::new(Object::Float(x + y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(add_class.clone(), [Type::Float], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "+",
+                    Rc::new(curry!([], _runner,
+                        (Object::Float(x), Object::Float(y)) => {
+                            Ok(Rc::new(Object::Float(x + y)))
+                        }
+                    )),
+                )
+                .build()
+        });
 
         // Add for String
-        self.def_instance(
-            add_class.clone(),
-            [Type::String],
-            &HashMap::from_iter([(
-                "+",
-                Rc::new(curry!([], _runner,
-                    (Object::String(x), Object::String(y)) => {
-                        let mut result = Rc::unwrap_or_clone(x);
-                        result.push_str(&y);
-                        Ok(Rc::new(Object::String(Rc::new(result))))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(add_class.clone(), [Type::String], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "+",
+                    Rc::new(curry!([], _runner,
+                        (Object::String(x), Object::String(y)) => {
+                            Ok(Rc::new(Object::String(Rc::new(Rc::unwrap_or_clone(x) + &y))))
+                        }
+                    )),
+                )
+                .build()
+        });
 
         // Add for List
-        let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("c"));
-        self.def_instance(
+        let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+        self.def_instance_scheme_without_constraints(
             add_class,
             [Type::List(Rc::new(Type::Var(b)))],
-            &HashMap::from_iter([(
-                "+",
-                Rc::new(curry!([], _runner,
-                    (Object::List(x), Object::List(y)) => {
-                        let mut result = x.clone();
-                        result.append(y);
-                        Ok(Rc::new(Object::List(result)))
-                    }
-                )),
-            )]),
+            [b],
+            |instance| {
+                InstanceBodyBuilder::new(instance)
+                    .method_body(
+                        "+",
+                        Rc::new(curry!([], _runner,
+                            (Object::List(mut x), Object::List(y)) => {
+                                x.append(y);
+                                Ok(Rc::new(Object::List(Vector::from(x))))
+                            }
+                        )),
+                    )
+                    .build()
+            },
         );
     }
     fn def_sub_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let sub_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Sub".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "-".into(),
+        let sub_class = TypeClassBuilder::new("Sub", vec![a])
+            .method(
+                "-",
                 TypeScheme::forall(
-                    [a],
+                    [],
                     Type::arrow(Type::Var(a), Type::arrow(Type::Var(a), Type::Var(a))),
                 ),
-            )]),
-        }));
+                vec![],
+            )
+            .build();
         self.def_type_class(sub_class.clone());
 
         // Sub for Int
-        self.def_instance(
-            sub_class.clone(),
-            [Type::Int],
-            &HashMap::from_iter([(
-                "-",
-                Rc::new(curry!([], _runner,
-                    (Object::Int(x), Object::Int(y)) => Ok(Rc::new(Object::Int(x - y)))
-                )),
-            )]),
-        );
+        self.def_instance(sub_class.clone(), [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "-",
+                    Rc::new(curry!([], _runner,
+                        (Object::Int(x), Object::Int(y)) => {
+                            Ok(Rc::new(Object::Int(x - y)))
+                        }
+                    )),
+                )
+                .build()
+        });
 
         // Sub for Float
-        self.def_instance(
-            sub_class,
-            [Type::Float],
-            &HashMap::from_iter([(
-                "-",
-                Rc::new(curry!([], _runner,
-                    (Object::Float(x), Object::Float(y)) => Ok(Rc::new(Object::Float(x - y)))
-                ))
-            )]),
-        );
+        self.def_instance(sub_class, [Type::Float], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "-",
+                    Rc::new(curry!([], _runner,
+                        (Object::Float(x), Object::Float(y)) => {
+                            Ok(Rc::new(Object::Float(x - y)))
+                        }
+                    )),
+                )
+                .build()
+        });
     }
     fn def_mul_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let mul_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Mul".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "*".into(),
+        let mul_class = TypeClassBuilder::new("Mul", vec![a])
+            .method(
+                "*",
                 TypeScheme::forall(
-                    [a],
+                    [],
                     Type::arrow(Type::Var(a), Type::arrow(Type::Var(a), Type::Var(a))),
                 ),
-            )]),
-        }));
+                vec![],
+            )
+            .build();
         self.def_type_class(mul_class.clone());
 
         // Mul for Int
-        self.def_instance(
-            mul_class.clone(),
-            [Type::Int],
-            &HashMap::from_iter([(
-                "*",
-                Rc::new(curry!([], _runner,
-                    (Object::Int(x), Object::Int(y)) => {
-                        Ok(Rc::new(Object::Int(x * y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(mul_class.clone(), [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "*",
+                    Rc::new(curry!([], _runner,
+                        (Object::Int(x), Object::Int(y)) => {
+                            Ok(Rc::new(Object::Int(x * y)))
+                        }
+                    )),
+                )
+                .build()
+        });
         // Mul for Float
-        self.def_instance(
-            mul_class,
-            [Type::Float],
-            &HashMap::from_iter([(
-                "*",
-                Rc::new(curry!([], _runner,
-                    (Object::Float(x), Object::Float(y)) => {
-                        Ok(Rc::new(Object::Float(x * y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(mul_class, [Type::Float], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "*",
+                    Rc::new(curry!([], _runner,
+                        (Object::Float(x), Object::Float(y)) => {
+                            Ok(Rc::new(Object::Float(x * y)))
+                        }
+                    )),
+                )
+                .build()
+        });
     }
     fn def_div_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let div_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Div".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "/".into(),
+        let div_class = TypeClassBuilder::new("Div", vec![a])
+            .method(
+                "/",
                 TypeScheme::forall(
-                    [a],
+                    [],
                     Type::arrow(Type::Var(a), Type::arrow(Type::Var(a), Type::Var(a))),
                 ),
-            )]),
-        }));
+                vec![],
+            )
+            .build();
         self.def_type_class(div_class.clone());
 
         // Div for Int
-        self.def_instance(
-            div_class.clone(),
-            [Type::Int],
-            &HashMap::from_iter([(
-                "/",
-                Rc::new(curry!([], _runner,
-                    (Object::Int(x), Object::Int(y)) => {
-                        Ok(Rc::new(Object::Int(x / y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(div_class.clone(), [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "/",
+                    Rc::new(curry!([], _runner,
+                        (Object::Int(x), Object::Int(y)) => {
+                            Ok(Rc::new(Object::Int(x / y)))
+                        }
+                    )),
+                )
+                .build()
+        });
         // Div for Float
-        self.def_instance(
-            div_class,
-            [Type::Float],
-            &HashMap::from_iter([(
-                "/",
-                Rc::new(curry!([], _runner,
-                    (Object::Float(x), Object::Float(y)) => {
-                        Ok(Rc::new(Object::Float(x / y)))
-                    }
-                ))
-            )]),
-        );
+        self.def_instance(div_class, [Type::Float], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "/",
+                    Rc::new(curry!([], _runner,
+                        (Object::Float(x), Object::Float(y)) => {
+                            Ok(Rc::new(Object::Float(x / y)))
+                        }
+                    )),
+                )
+                .build()
+        });
     }
     fn def_mod_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let mod_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Mod".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "%".into(),
+        let mod_class = TypeClassBuilder::new("Mod", vec![a])
+            .method(
+                "%",
                 TypeScheme::forall(
-                    [a],
+                    [],
                     Type::arrow(Type::Var(a), Type::arrow(Type::Var(a), Type::Var(a))),
                 ),
-            )]),
-        }));
+                vec![],
+            )
+            .build();
         self.def_type_class(mod_class.clone());
 
         // Mod for Int
-        self.def_instance(
-            mod_class.clone(),
-            [Type::Int],
-            &HashMap::from_iter([(
-                "%",
-                Rc::new(curry!([], _runner,
-                    (Object::Int(x), Object::Int(y)) => {
-                        Ok(Rc::new(Object::Int(x % y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(mod_class.clone(), [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "%",
+                    Rc::new(curry!([], _runner,
+                        (Object::Int(x), Object::Int(y)) => {
+                            Ok(Rc::new(Object::Int(x % y)))
+                        }
+                    )),
+                )
+                .build()
+        });
         // Mod for Float
-        self.def_instance(
-            mod_class,
-            [Type::Float],
-            &HashMap::from_iter([(
-                "%",
-                Rc::new(curry!([], _runner,
-                    (Object::Float(x), Object::Float(y)) => {
-                        Ok(Rc::new(Object::Float(x % y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(mod_class, [Type::Float], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "%",
+                    Rc::new(curry!([], _runner,
+                        (Object::Float(x), Object::Float(y)) => {
+                            Ok(Rc::new(Object::Float(x % y)))
+                        }
+                    )),
+                )
+                .build()
+        });
     }
     fn def_neg_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let neg_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Neg".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "-_".into(),
-                TypeScheme::forall([a], Type::arrow(Type::Var(a), Type::Var(a))),
-            )]),
-        }));
+        let neg_class = TypeClassBuilder::new("Neg", vec![a])
+            .method(
+                "-_",
+                TypeScheme::forall([], Type::arrow(Type::Var(a), Type::Var(a))),
+                vec![],
+            )
+            .build();
         self.def_type_class(neg_class.clone());
 
         // Neg for Int
-        self.def_instance(
-            neg_class.clone(),
-            [Type::Int],
-            &HashMap::from_iter([(
-                "-_",
-                Rc::new(native_func!(_runner,
-                    Object::Int(x) => {
-                        Ok(Rc::new(Object::Int(-x)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(neg_class.clone(), [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "-_",
+                    native_func!(_runner,
+                        Object::Int(x) => {
+                            Ok(Rc::new(Object::Int(-x)))
+                        }
+                    ),
+                )
+                .build()
+        });
         // Neg for Float
-        self.def_instance(
-            neg_class,
-            [Type::Float],
-            &HashMap::from_iter([(
-                "-_",
-                Rc::new(native_func!(_runner,
-                    Object::Float(x) => {
-                        Ok(Rc::new(Object::Float(-x)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(neg_class, [Type::Float], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "-_",
+                    native_func!(_runner,
+                        Object::Float(x) => {
+                            Ok(Rc::new(Object::Float(-x)))
+                        }
+                    ),
+                )
+                .build()
+        });
     }
     fn def_not_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let not_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Not".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "!_".into(),
-                TypeScheme::forall([a], Type::arrow(Type::Var(a), Type::Var(a))),
-            )]),
-        }));
+        let not_class = TypeClassBuilder::new("Not", vec![a])
+            .method(
+                "!_",
+                TypeScheme::forall([], Type::arrow(Type::Var(a), Type::Var(a))),
+                vec![],
+            )
+            .build();
         self.def_type_class(not_class.clone());
 
         // Not for Bool
-        self.def_instance(
-            not_class.clone(),
-            [Type::Bool],
-            &HashMap::from_iter([(
-                "!_",
-                Rc::new(native_func!(_runner,
-                    Object::Bool(b) => {
-                        Ok(Rc::new(Object::Bool(!b)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(not_class.clone(), [Type::Bool], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "!_",
+                    native_func!(_runner,
+                        Object::Bool(b) => {
+                            Ok(Rc::new(Object::Bool(!b)))
+                        }
+                    ),
+                )
+                .build()
+        });
         // Not for Int
-        self.def_instance(
-            not_class,
-            [Type::Int],
-            &HashMap::from_iter([(
-                "!_",
-                Rc::new(native_func!(_runner,
-                    Object::Int(x) => {
-                        Ok(Rc::new(Object::Int(!x)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(not_class, [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "!_",
+                    native_func!(_runner,
+                        Object::Int(x) => {
+                            Ok(Rc::new(Object::Int(!x)))
+                        }
+                    ),
+                )
+                .build()
+        });
     }
     fn def_and_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let and_class = TypeClassRef(Rc::new(TypeClass {
-            name: "And".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "&".into(),
+        let and_class = TypeClassBuilder::new("And", vec![a])
+            .method(
+                "&",
                 TypeScheme::forall(
-                    [a],
+                    [],
                     Type::arrow(Type::Var(a), Type::arrow(Type::Var(a), Type::Var(a))),
                 ),
-            )]),
-        }));
+                vec![],
+            )
+            .build();
         self.def_type_class(and_class.clone());
 
         // And for Bool
-        self.def_instance(
-            and_class.clone(),
-            [Type::Bool],
-            &HashMap::from_iter([(
-                "&",
-                Rc::new(curry!([], _runner,
-                    (Object::Bool(x), Object::Bool(y)) => {
-                        Ok(Rc::new(Object::Bool(x & y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(and_class.clone(), [Type::Bool], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "&",
+                    Rc::new(curry!([], _runner,
+                        (Object::Bool(x), Object::Bool(y)) => {
+                            Ok(Rc::new(Object::Bool(x & y)))
+                        }
+                    )),
+                )
+                .build()
+        });
         // And for Int
-        self.def_instance(
-            and_class,
-            [Type::Int],
-            &HashMap::from_iter([(
-                "&",
-                Rc::new(curry!([], _runner,
-                    (Object::Int(x), Object::Int(y)) => {
-                        Ok(Rc::new(Object::Int(x & y)))
-                    }
-                ))
-            )]),
-        );
+        self.def_instance(and_class, [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "&",
+                    Rc::new(curry!([], _runner,
+                        (Object::Int(x), Object::Int(y)) => {
+                            Ok(Rc::new(Object::Int(x & y)))
+                        }
+                    )),
+                )
+                .build()
+        });
     }
     fn def_or_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let or_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Or".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "|".into(),
+        let or_class = TypeClassBuilder::new("Or", vec![a])
+            .method(
+                "|",
                 TypeScheme::forall(
-                    [a],
+                    [],
                     Type::arrow(Type::Var(a), Type::arrow(Type::Var(a), Type::Var(a))),
                 ),
-            )]),
-        }));
+                vec![],
+            )
+            .build();
         self.def_type_class(or_class.clone());
 
         // Or for Bool
-        self.def_instance(
-            or_class.clone(),
-            [Type::Bool],
-            &HashMap::from_iter([(
-                "|",
-                Rc::new(curry!([], _runner,
-                    (Object::Bool(x), Object::Bool(y)) => {
-                        Ok(Rc::new(Object::Bool(x | y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(or_class.clone(), [Type::Bool], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "|",
+                    Rc::new(curry!([], _runner,
+                        (Object::Bool(x), Object::Bool(y)) => {
+                            Ok(Rc::new(Object::Bool(x | y)))
+                        }
+                    )),
+                )
+                .build()
+        });
         // Or for Int
-        self.def_instance(
-            or_class,
-            [Type::Int],
-            &HashMap::from_iter([(
-                "|",
-                Rc::new(curry!([], _runner,
-                    (Object::Int(x), Object::Int(y)) => {
-                        Ok(Rc::new(Object::Int(x | y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(or_class, [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "|",
+                    Rc::new(curry!([], _runner,
+                        (Object::Int(x), Object::Int(y)) => {
+                            Ok(Rc::new(Object::Int(x | y)))
+                        }
+                    )),
+                )
+                .build()
+        });
     }
     fn def_eq_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let eq_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Eq".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "==".into(),
+        let eq_class = TypeClassBuilder::new("Eq", vec![a])
+            .method(
+                "==",
                 TypeScheme::forall(
-                    [a],
+                    [],
                     Type::arrow(Type::Var(a), Type::arrow(Type::Var(a), Type::Bool)),
                 ),
-            )]),
-        }));
+                vec![],
+            )
+            .build();
         self.def_type_class(eq_class.clone());
 
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
@@ -610,141 +894,143 @@ impl<'a> StdLibDefiner<'a> {
             class: eq_class.clone(),
             assigned_types: vector![Type::Var(a)],
         });
-        self.def_func(
+        self.def_func_with_constraints(
             "!=",
             TypeScheme::forall_with_constraints(
                 [a],
                 Type::arrow(Type::Var(a), Type::arrow(Type::Var(a), Type::Bool)),
                 [constraint.clone()],
             ),
-            Variable::Def(Rc::new(move |_, instance_replace| {
-                let eq_instance = instance_replace[&constraint.clone()].clone();
-                Ok(Rc::new(curry!([eq_instance], runner,
-                    (l, r) => {
-                        let eq_func = runner.instance_methods[&eq_instance]["=="].clone();
-                        let eq_func = runner.read_var(&eq_func, im_rc::HashMap::default())?;
-                        let Object::Func(eq_func) = &*eq_func else {
-                            panic!("Eq::== is not a Func")
+            |_runner, instances| {
+                let eq_instance_body = instances[0].clone();
+                Rc::new(curry!([eq_instance_body], runner,
+                    (arg1, arg2) => {
+                        let eq_func = eq_instance_body.methods.get("==").expect("method '==' not found in Eq instance");
+                        let eq_func = runner.read_var(eq_func, im_rc::HashMap::default())?;
+                        let Object::Func(eq_func) = eq_func.as_ref() else {
+                            panic!("method '==' is not a function");
                         };
-                        let Object::Func(f) = &*runner.call(eq_func, Rc::new(l))? else {
-                            panic!("Eq::== did not return a Func")
+                        let f = runner.call(eq_func, Rc::new(arg1))?;
+                        let Object::Func(f) = f.as_ref() else {
+                            panic!("method '==' did not return a function");
                         };
-                        let eq_result = runner.call(f, Rc::new(r))?;
+                        let eq_result = runner.call(f, Rc::new(arg2))?;
                         match &*eq_result {
-                            Object::Bool(b) => {
-                                Ok(Rc::new(Object::Bool(!b)))
-                            },
-                            _ => panic!("Eq::== did not return a Bool"),
+                            Object::Bool(b) => Ok(Rc::new(Object::Bool(!b))),
+                            _ => panic!("Eq '==' method did not return Bool"),
                         }
-                    }
-                )))
-            })),
+                    }))
+            }
         );
 
         // Eq for Int
-        self.def_instance(
-            eq_class.clone(),
-            [Type::Int],
-            &HashMap::from_iter([(
-                "==",
-                Rc::new(curry!([], _runner,
-                    (Object::Int(x), Object::Int(y)) => {
-                        Ok(Rc::new(Object::Bool(x == y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(eq_class.clone(), [Type::Int], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "==",
+                    Rc::new(curry!([], _runner,
+                        (Object::Int(x), Object::Int(y)) => {
+                            Ok(Rc::new(Object::Bool(x == y)))
+                        }
+                    )),
+                )
+                .build()
+        });
         // Eq for Float
-        self.def_instance(
-            eq_class.clone(),
-            [Type::Float],
-            &HashMap::from_iter([(
-                "==",
-                Rc::new(curry!([], _runner,
-                    (Object::Float(x), Object::Float(y)) => {
-                        Ok(Rc::new(Object::Bool(x == y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(eq_class.clone(), [Type::Float], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "==",
+                    Rc::new(curry!([], _runner,
+                        (Object::Float(x), Object::Float(y)) => {
+                            Ok(Rc::new(Object::Bool(x == y)))
+                        }
+                    )),
+                )
+                .build()
+        });
         //Eq for Bool
-        self.def_instance(
-            eq_class.clone(),
-            [Type::Bool],
-            &HashMap::from_iter([(
-                "==",
-                Rc::new(curry!([], _runner,
-                    (Object::Bool(x), Object::Bool(y)) => {
-                        Ok(Rc::new(Object::Bool(x == y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(eq_class.clone(), [Type::Bool], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "==",
+                    Rc::new(curry!([], _runner,
+                        (Object::Bool(x), Object::Bool(y)) => {
+                            Ok(Rc::new(Object::Bool(x == y)))
+                        }
+                    )),
+                )
+                .build()
+        });
         //Eq for String
-        self.def_instance(
-            eq_class.clone(),
-            [Type::String],
-            &HashMap::from_iter([(
-                "==",
-                Rc::new(curry!([], _runner,
-                    (Object::String(x), Object::String(y)) => {
-                        Ok(Rc::new(Object::Bool(x == y)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(eq_class.clone(), [Type::String], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "==",
+                    Rc::new(curry!([], _runner,
+                            (Object::String(x), Object::String(y)) => {
+                                Ok(Rc::new(Object::Bool(x == y)))
+                            }
+                    )),
+                )
+                .build()
+        });
         //Eq for Unit
-        self.def_instance(
-            eq_class,
-            [Type::Unit],
-            &HashMap::from_iter([(
-                "==",
-                Rc::new(curry!([], _runner,
-                    (Object::Unit, Object::Unit) => {
-                        Ok(Rc::new(Object::Bool(true)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(eq_class, [Type::Unit], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "==",
+                    Rc::new(curry!([], _runner,
+                        (Object::Unit, Object::Unit) => {
+                            Ok(Rc::new(Object::Bool(true)))
+                        }
+                    )),
+                )
+                .build()
+        });
     }
     fn def_len_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
-        let len_class = TypeClassRef(Rc::new(TypeClass {
-            name: "Len".into(),
-            bound_vars: vec![a],
-            methods: FxHashMap::from_iter([(
-                "len".into(),
-                TypeScheme::forall([a], Type::arrow(Type::Var(a), Type::Int)),
-            )]),
-        }));
+        let len_class = TypeClassBuilder::new("Len", vec![a])
+            .method(
+                "len",
+                TypeScheme::forall([], Type::arrow(Type::Var(a), Type::Int)),
+                vec![],
+            )
+            .build();
         self.def_type_class(len_class.clone());
 
         // Len for String
-        self.def_instance(
-            len_class.clone(),
-            [Type::String],
-            &HashMap::from_iter([(
-                "len",
-                Rc::new(native_func!(_runner,
-                    Object::String(s) => {
-                        Ok(Rc::new(Object::Int(s.len() as i64)))
-                    }
-                )),
-            )]),
-        );
+        self.def_instance(len_class.clone(), [Type::String], |instance| {
+            InstanceBodyBuilder::new(instance)
+                .method_body(
+                    "len",
+                    native_func!(_runner,
+                        Object::String(s) => {
+                            Ok(Rc::new(Object::Int(s.len() as i64)))
+                        }
+                    ),
+                )
+                .build()
+        });
         // Len for List
         let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
-        self.def_instance(
-            len_class,
+        self.def_instance_scheme_without_constraints(
+            len_class.clone(),
             [Type::list(Type::Var(b))],
-            &HashMap::from_iter([(
-                "len",
-                Rc::new(native_func!(_runner,
-                    Object::List(elems) => {
-                        Ok(Rc::new(Object::Int(elems.len() as i64)))
-                    }
-                )),
-            )]),
+            [b],
+            |instance| {
+                InstanceBodyBuilder::new(instance)
+                    .method_body(
+                        "len",
+                        native_func!(_runner,
+                            Object::List(elems) => {
+                                Ok(Rc::new(Object::Int(elems.len() as i64)))
+                            }
+                        ),
+                    )
+                    .build()
+            },
         );
     }
     fn def_list_functions(&mut self) {
@@ -831,7 +1117,9 @@ impl<'a> StdLibDefiner<'a> {
                 ),
             )
         };
-        self.def_func("zip", type_scheam,
+        self.def_func(
+            "zip",
+            type_scheam,
             curry!([], _runner,
                 (Object::List(list1), Object::List(list2)) => {
                     let len = std::cmp::min(list1.len(), list2.len());
@@ -845,7 +1133,7 @@ impl<'a> StdLibDefiner<'a> {
                     }
                     Ok(Rc::new(Object::List(zipped)))
                 }
-            )
+            ),
         );
     }
     fn def_func_functions(&mut self) {
@@ -974,14 +1262,18 @@ impl<'a> StdLibDefiner<'a> {
                 ),
             )
         };
-        self.def_func(",", type_scheam, curry!([], _runner,
-            (left, right) => {
-                Ok(Rc::new(Object::Comma(
-                    Rc::new(left.clone()),
-                    Rc::new(right.clone()),
-                )))
-            }
-        ));
+        self.def_func(
+            ",",
+            type_scheam,
+            curry!([], _runner,
+                (left, right) => {
+                    Ok(Rc::new(Object::Comma(
+                        Rc::new(left.clone()),
+                        Rc::new(right.clone()),
+                    )))
+                }
+            ),
+        );
         let type_scheam = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
@@ -1050,7 +1342,7 @@ impl<'a> StdLibDefiner<'a> {
         self.def_io_functions();
         StdLib {
             extern_funcs: self.funcs,
-            instance_methods: self.instance_methods,
+            instance_body_definers: self.instance_body_definers,
         }
     }
 }

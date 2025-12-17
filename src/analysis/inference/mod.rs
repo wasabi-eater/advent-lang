@@ -200,7 +200,8 @@ pub struct InferencePool {
     extern_funcs: FxHashMap<Rc<str>, (TypeScheme, VarId)>,
     type_classes: FxHashMap<Rc<str>, TypeClassRef>,
     method_classes: FxHashMap<Rc<str>, TypeClassRef>,
-    instances: FxHashMap<TypeClassRef, Vector<Rc<Instance>>>,
+    instances: FxHashMap<TypeClassRef, Vector<InstanceDefId>>,
+    instance_arena: InstanceArena,
 }
 #[derive(Default, Clone)]
 pub struct Scope {
@@ -217,7 +218,8 @@ struct ProgramDataBuilder {
     expr_ident_ref: FxHashMap<ExprRef, IdentRef>,
     let_var_id: FxHashMap<ExprRef, VarId>,
     new_scope: im_rc::HashMap<Rc<str>, (VarId, TypeScheme), fxhash::FxBuildHasher>,
-    instances: im_rc::HashMap<TypeClassRef, Vector<Rc<Instance>>, fxhash::FxBuildHasher>,
+    instance_defs: im_rc::HashMap<TypeClassRef, Vector<InstanceDefId>, fxhash::FxBuildHasher>,
+    constraints: im_rc::HashMap<TypeClassRef, Vector<ConstraintId>, fxhash::FxBuildHasher>,
 }
 
 impl Default for InferencePool {
@@ -242,6 +244,7 @@ impl InferencePool {
             extern_funcs: FxHashMap::default(),
             method_classes: FxHashMap::default(),
             instances: FxHashMap::default(),
+            instance_arena: InstanceArena::default(),
         }
     }
     pub fn extern_type_class(&mut self, type_class: TypeClassRef) {
@@ -252,17 +255,26 @@ impl InferencePool {
         self.type_classes
             .insert(type_class.0.name.clone(), type_class);
     }
-    pub fn extern_instance(&mut self, instance: Rc<Instance>) {
+    pub fn extern_instance(&mut self, instance_def: InstanceDef) -> InstanceDefId {
+        let instance = instance_def.scheme.instance.clone();
+        let id = self.instance_arena.insert_def(instance_def);
         self.instances
             .entry(instance.class.clone())
             .or_default()
-            .push_back(instance.clone());
+            .push_back(id);
+        id
     }
-    pub fn extern_func(&mut self, name: impl Into<Rc<str>>, type_scheme: TypeScheme) -> VarId {
+    pub fn extern_func(
+        &mut self,
+        name: impl Into<Rc<str>>,
+        type_scheme: TypeScheme,
+        constraints: Vector<ConstraintId>,
+    ) -> VarId {
         let name = name.into();
         let var_id = self.var_arena.alloc(VarData {
             name: name.clone(),
             ty: type_scheme.clone(),
+            constraints,
         });
         self.extern_funcs
             .insert(name.clone(), (type_scheme.clone(), var_id));
@@ -271,6 +283,9 @@ impl InferencePool {
     }
     pub fn tyvar_arena(&mut self) -> &mut id_arena::Arena<TyVarBody> {
         &mut self.tyvar_arena
+    }
+    pub fn alloc_constraint(&mut self, constraint: Constraint) -> ConstraintId {
+        self.instance_arena.insert_constraint(constraint)
     }
     pub fn display(&self, ty: Typing) -> String {
         let mut s = String::new();
@@ -516,11 +531,12 @@ impl InferencePool {
             expr_ident_ref: FxHashMap::default(),
             let_var_id: FxHashMap::default(),
             new_scope,
-            instances: self
+            instance_defs: self
                 .instances
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            constraints: im_rc::HashMap::default(),
         };
         self.set_program_data(expr, &mut program_data_builder)?;
         Ok(ProgramData {
@@ -534,6 +550,7 @@ impl InferencePool {
             type_classes: self.type_classes,
             method_classes: self.method_classes,
             instances: self.instances,
+            instance_arena: self.instance_arena,
         })
     }
     fn set_program_data(
@@ -569,20 +586,30 @@ impl InferencePool {
                 else {
                     panic!("unexpected var type");
                 };
+                let constraints: Vector<ConstraintId> = type_scheme
+                    .constraints
+                    .iter()
+                    .map(|inst| {
+                        self.instance_arena.insert_constraint(Constraint {
+                            instance: inst.clone(),
+                        })
+                    })
+                    .collect();
                 let new_var_id = self.var_arena.alloc(VarData {
                     name: name.clone(),
                     ty: type_scheme.clone(),
+                    constraints: constraints.clone(),
                 });
-                let old_instances = program_data_builder.instances.clone();
-                for instance in &type_scheme.constraints {
+                let old_constraints = program_data_builder.constraints.clone();
+                for (constraint, constraint_id) in type_scheme.constraints.iter().zip(constraints) {
                     program_data_builder
-                        .instances
-                        .entry(instance.class.clone())
+                        .constraints
+                        .entry(constraint.class.clone())
                         .or_default()
-                        .push_back(instance.clone());
+                        .push_back(constraint_id);
                 }
                 self.set_program_data(assigned_expr.clone(), program_data_builder)?;
-                program_data_builder.instances = old_instances;
+                program_data_builder.constraints = old_constraints;
 
                 program_data_builder
                     .let_var_id
@@ -602,6 +629,7 @@ impl InferencePool {
                 let new_var_id = self.var_arena.alloc(VarData {
                     name: name.clone(),
                     ty: type_scheme.clone(),
+                    constraints: Vector::new(),
                 });
                 self.set_program_data(assigned_expr.clone(), program_data_builder)?;
 
@@ -625,100 +653,125 @@ impl InferencePool {
                 let typing = self.expr_typing[&ExprRef(expr.clone())].typing.clone();
                 let ty = typing.try_to_type(&mut self.tmp_var_arena)?;
                 if let Some((var_id, type_scheme)) = program_data_builder.new_scope.get(name) {
-                    let subst = type_scheme.assume_subst(&ty).unwrap();
-                    let given_instance: im_rc::HashMap<
-                        Rc<Instance>,
-                        Rc<Instance>,
-                        std::hash::BuildHasherDefault<fxhash::FxHasher>,
-                    > = type_scheme
+                    let subst = type_scheme.assume_bound_vars_subst(&ty).unwrap();
+                    let var_data = self.var_arena[*var_id].clone();
+                    let constraint_assign = var_data
                         .constraints
                         .iter()
-                        .map(|instance| (instance.clone(), Rc::new(instance.subst(&subst))))
-                        .collect();
-                    if !given_instance.is_empty() {
-                        println!("{given_instance:?}");
-                    }
-                    if let Some(instance) = given_instance.values().find(|&inst| {
-                        !program_data_builder
-                            .instances
-                            .get(&inst.class)
-                            .is_some_and(|instances| instances.contains(inst))
-                    }) {
-                        return Err(errors::Error::MissingInstance {
-                            instance: instance.clone(),
-                        });
-                    }
+                        .zip(&type_scheme.constraints)
+                        .map(|(&constraint_id, scheme_constraint)| {
+                            let constraint = scheme_constraint.subst(&subst);
+                            let assigned =
+                                self.get_instance_ref(program_data_builder, constraint)?;
+                            Ok((constraint_id, assigned))
+                        })
+                        .collect::<errors::Result<ConstraintAssign>>()?;
                     program_data_builder.expr_ident_ref.insert(
                         ExprRef(expr.clone()),
-                        IdentRef::Var(*var_id, given_instance),
+                        IdentRef::Var(*var_id, constraint_assign),
                     );
                     return Ok(());
                 }
                 let Some(type_class) = self.method_classes.get(name) else {
                     return Err(errors::Error::UndefiedIdent(name.clone()));
                 };
-                let method_type_scheme = type_class.0.methods[name].clone();
-                let Some(subst) = method_type_scheme.assume_subst(&ty) else {
+                let Some(subst) = type_class.0.method_type_assume_bound_vars_subst(name, &ty)
+                else {
                     return Err(errors::Error::UndefiedIdent(name.clone()));
                 };
 
-                let method_type_scheme = method_type_scheme.subst(&subst);
-                let candidates = self.instances[type_class]
+                let expected_instance = Instance {
+                    class: type_class.clone(),
+                    assigned_types: type_class
+                        .0
+                        .bound_vars
+                        .iter()
+                        .map(|var| subst[var].clone())
+                        .collect(),
+                };
+                let instance_ref =
+                    self.get_instance_ref(program_data_builder, expected_instance)?;
+                let class = self.instance_arena.get_class_of_ref(&instance_ref);
+                let instance = self.instance_arena.get_instance(&instance_ref);
+                let constraint_ids = &class.0.method_constraint_ids[name];
+                let method_type_scheme = instance.method_type_scheme(name).unwrap();
+                let constraints = &method_type_scheme.constraints;
+                let subst = method_type_scheme.assume_bound_vars_subst(&ty).unwrap();
+
+                let constraint_assign = constraint_ids
                     .iter()
-                    .filter(|instance| {
-                        instance
-                            .method_type_scheme(name)
-                            .is_some_and(|method_scheme| method_scheme.assume_subst(&ty).is_some())
+                    .zip(constraints)
+                    .map(|(&constraint_id, scheme_constraint)| {
+                        let constraint = scheme_constraint.subst(&subst);
+                        let assigned = self.get_instance_ref(program_data_builder, constraint)?;
+                        Ok((constraint_id, assigned))
                     })
-                    .cloned()
-                    .collect_vec();
-                match candidates.len() {
-                    0 => {
-                        let expeceted_instance = Instance {
-                            class: type_class.clone(),
-                            assigned_types: method_type_scheme
-                                .bound_vars
-                                .iter()
-                                .map(|var| subst[var].clone())
-                                .collect(),
-                        };
-                        Err(errors::Error::MissingInstance {
-                            instance: Rc::new(expeceted_instance),
+                    .collect::<errors::Result<ConstraintAssign>>()?;
+                program_data_builder.expr_ident_ref.insert(
+                    ExprRef(expr.clone()),
+                    IdentRef::Method(instance_ref, name.clone(), constraint_assign),
+                );
+                Ok(())
+            }
+        }
+    }
+    fn get_instance_ref(
+        &self,
+        program_data_builder: &ProgramDataBuilder,
+        instance: Instance,
+    ) -> errors::Result<InstanceRef> {
+        let constraints = program_data_builder
+            .constraints
+            .get(&instance.class)
+            .unwrap_or(&Vector::new())
+            .iter()
+            .cloned()
+            .filter(|&constraint_id| {
+                *self.instance_arena.get_constraint(constraint_id).instance == instance
+            })
+            .collect_vec();
+        let instance_defs = program_data_builder
+            .instance_defs
+            .get(&instance.class)
+            .unwrap_or(&Vector::new())
+            .iter()
+            .cloned()
+            .filter_map(|instance_def_id| {
+                let instance_def = self.instance_arena.get_def(instance_def_id);
+                let instance_scheme = &instance_def.scheme;
+                Some((
+                    instance_scheme.assume_subst(&instance)?,
+                    instance_def,
+                    instance_scheme,
+                    instance_def_id,
+                ))
+            })
+            .collect_vec();
+        match instance_defs.len() + constraints.len() {
+            0 => Err(errors::Error::MissingInstance {
+                instance: instance.into(),
+            }),
+            2.. => Err(errors::Error::AmbiguousInstance {
+                instance: instance.into(),
+            }),
+            1 => {
+                if instance_defs.is_empty() {
+                    let constraint_id = constraints[0];
+                    Ok(InstanceRef::Given(constraint_id))
+                } else {
+                    let (subst, instance_def, instance_scheme, instance_def_id) = &instance_defs[0];
+                    let constraint_assign = instance_def
+                        .constraints
+                        .iter()
+                        .zip(&instance_scheme.constraints)
+                        .map(|(&def_constraint_id, scheme_constraint)| {
+                            let constraint = scheme_constraint.subst(subst);
+                            let assigned =
+                                self.get_instance_ref(program_data_builder, constraint)?;
+                            Ok((def_constraint_id, assigned))
                         })
-                    }
-                    1 => {
-                        let candidate = candidates[0].clone();
-                        let method_type_scheme = candidate.method_type_scheme(name).unwrap();
-                        let subst = method_type_scheme.assume_subst(&ty).unwrap();
-                        let method_constraints: im_rc::HashMap<
-                            Rc<Instance>,
-                            Rc<Instance>,
-                            std::hash::BuildHasherDefault<fxhash::FxHasher>,
-                        > = method_type_scheme
-                            .constraints
-                            .iter()
-                            .map(|instance| (instance.clone(), Rc::new(instance.subst(&subst))))
-                            .collect();
-                        if let Some(instance) = method_constraints.values().find(|&inst| {
-                            !program_data_builder
-                                .instances
-                                .get(&inst.class)
-                                .is_some_and(|instances| instances.contains(inst))
-                        }) {
-                            return Err(errors::Error::MissingInstance {
-                                instance: instance.clone(),
-                            });
-                        }
-                        program_data_builder.expr_ident_ref.insert(
-                            ExprRef(expr.clone()),
-                            IdentRef::Method(candidate, name.clone(), method_constraints),
-                        );
-                        Ok(())
-                    }
-                    2.. => Err(errors::Error::AmbigiousOverload {
-                        name: name.clone(),
-                        candidates,
-                    }),
+                        .collect::<errors::Result<ConstraintAssign>>()?;
+                    Ok(InstanceRef::Def(*instance_def_id, constraint_assign))
                 }
             }
         }

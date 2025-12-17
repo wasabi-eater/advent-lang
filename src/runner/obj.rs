@@ -20,8 +20,7 @@ pub enum Func {
     UserDefFunc(Rc<str>, Rc<Expr>),
     NativeFunc(NativeFuncInner),
 }
-pub type NativeFuncInner =
-    Rc<dyn for<'a> Fn(&'a mut Runner, Rc<Object>) -> errors::Result<Rc<Object>>>;
+pub type NativeFuncInner = Rc<dyn Fn(&mut Runner, Rc<Object>) -> errors::Result<Rc<Object>>>;
 
 impl Debug for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

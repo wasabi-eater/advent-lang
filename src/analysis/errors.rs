@@ -1,5 +1,8 @@
 use crate::{
-    analysis::inference::{TmpTyVarArena, TmpTyVarId, typing::Typing},
+    analysis::{
+        inference::{TmpTyVarArena, TmpTyVarId, typing::Typing},
+        types::Instance,
+    },
     ast::Expr,
 };
 use std::{fmt::Debug, rc::Rc};
@@ -16,13 +19,12 @@ pub enum Error {
         tmp_id: TmpTyVarId,
         arena: TmpTyVarArena,
     },
-    AmbigiousOverload {
-        name: Rc<str>,
-        candidates: Vec<Rc<crate::analysis::types::Instance>>,
+    AmbiguousInstance {
+        instance: Rc<Instance>,
     },
     IntegerOutOfSize(Rc<Expr>),
     MissingInstance {
-        instance: Rc<crate::analysis::types::Instance>,
+        instance: Rc<Instance>,
     },
 }
 pub type Result<T> = std::result::Result<T, Error>;
@@ -32,17 +34,10 @@ impl Debug for Error {
         match self {
             Self::UndefiedIdent(name) => write!(f, "undefined ident: {name}!"),
             Self::UnknownType { tmp_id, .. } => write!(f, "{:?} is unspecified!", tmp_id),
-            Self::AmbigiousOverload { name, candidates } => {
-                write!(f, "overload unspecified of {name}: (")?;
-                for (i, candidate) in candidates.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(
-                        f,
-                        "{}({:?})",
-                        candidate.class.0.name, candidate.assigned_types
-                    )?
+            Self::AmbiguousInstance { instance } => {
+                write!(f, "overload unspecified of {}: (", instance.class.0.name)?;
+                for ty in &instance.assigned_types {
+                    write!(f, "{ty:?}, ")?;
                 }
                 write!(f, ")")
             }

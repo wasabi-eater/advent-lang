@@ -2,6 +2,8 @@ use fxhash::FxHashMap;
 use im_rc::Vector;
 use std::{fmt::Debug, rc::Rc};
 
+use crate::analysis::program_data::ConstraintId;
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct TyVarBody {
     pub name: Option<String>,
@@ -45,6 +47,43 @@ impl Type {
     }
     pub fn comma(left: impl Into<Rc<Type>>, right: impl Into<Rc<Type>>) -> Self {
         Type::Comma(left.into(), right.into())
+    }
+
+    fn assume_subst_inner(&self, r: &Type, subst: &mut FxHashMap<TyVar, Type>) -> bool {
+        match (self, r) {
+            (Type::Unit, Type::Unit)
+            | (Type::Int, Type::Int)
+            | (Type::Float, Type::Float)
+            | (Type::String, Type::String)
+            | (Type::Bool, Type::Bool) => true,
+            (Type::Var(left), Type::Var(right)) if left == right => true,
+            (Type::Var(var), _) => {
+                if let Some(l) = subst.get(var) {
+                    Self::assume_subst_inner(&l.clone(), r, subst)
+                } else {
+                    subst.insert(*var, r.clone());
+                    true
+                }
+            }
+            (Type::Arrow(lp, lr), Type::Arrow(rp, rr)) => {
+                Self::assume_subst_inner(lp, rp, subst) && Self::assume_subst_inner(lr, rr, subst)
+            }
+            (Type::Comma(ll, lr), Type::Comma(rl, rr)) => {
+                Self::assume_subst_inner(ll, rl, subst) && Self::assume_subst_inner(lr, rr, subst)
+            }
+            (Type::List(l_inner), Type::List(r_inner)) => {
+                Self::assume_subst_inner(l_inner, r_inner, subst)
+            }
+            _ => false,
+        }
+    }
+    pub fn assume_subst(&self, r: &Type) -> Option<FxHashMap<TyVar, Type>> {
+        let mut subst = FxHashMap::default();
+        if Self::assume_subst_inner(self, r, &mut subst) {
+            Some(subst)
+        } else {
+            None
+        }
     }
 }
 impl Debug for Type {
@@ -94,9 +133,11 @@ impl From<Type> for TypeScheme {
     }
 }
 impl TypeScheme {
-    pub fn assume_subst(&self, ty: &Type) -> Option<FxHashMap<TyVar, Type>> {
+    pub fn assume_bound_vars_subst(&self, ty: &Type) -> Option<FxHashMap<TyVar, Type>> {
         let mut subst = FxHashMap::default();
-        if Self::assume_subst_inner(&self.ty, ty, &mut subst) {
+        if self.ty.assume_subst_inner(ty, &mut subst)
+            && subst.keys().all(|k| self.bound_vars.contains(k))
+        {
             Some(subst)
         } else {
             None
@@ -123,34 +164,6 @@ impl TypeScheme {
             constraints: constraints.into_iter().collect(),
         }
     }
-    fn assume_subst_inner(l: &Type, r: &Type, subst: &mut FxHashMap<TyVar, Type>) -> bool {
-        match (l, r) {
-            (Type::Unit, Type::Unit)
-            | (Type::Int, Type::Int)
-            | (Type::Float, Type::Float)
-            | (Type::String, Type::String)
-            | (Type::Bool, Type::Bool) => true,
-            (Type::Var(left), Type::Var(right)) if left == right => true,
-            (Type::Var(var), _) => {
-                if let Some(l) = subst.get(var) {
-                    Self::assume_subst_inner(&l.clone(), r, subst)
-                } else {
-                    subst.insert(*var, r.clone());
-                    true
-                }
-            }
-            (Type::Arrow(lp, lr), Type::Arrow(rp, rr)) => {
-                Self::assume_subst_inner(lp, rp, subst) && Self::assume_subst_inner(lr, rr, subst)
-            }
-            (Type::Comma(ll, lr), Type::Comma(rl, rr)) => {
-                Self::assume_subst_inner(ll, rl, subst) && Self::assume_subst_inner(lr, rr, subst)
-            }
-            (Type::List(l_inner), Type::List(r_inner)) => {
-                Self::assume_subst_inner(l_inner, r_inner, subst)
-            }
-            _ => false,
-        }
-    }
     pub fn subst(&self, subst: &FxHashMap<TyVar, Type>) -> TypeScheme {
         TypeScheme {
             bound_vars: self.bound_vars.clone(),
@@ -168,6 +181,25 @@ pub struct TypeClass {
     pub name: Rc<str>,
     pub bound_vars: Vec<TyVar>,
     pub methods: FxHashMap<Rc<str>, TypeScheme>,
+    pub method_constraint_ids: FxHashMap<Rc<str>, Vec<ConstraintId>>,
+}
+impl TypeClass {
+    pub fn method_type_assume_bound_vars_subst(
+        &self,
+        method_name: &Rc<str>,
+        ty: &Type,
+    ) -> Option<FxHashMap<TyVar, Type>> {
+        let type_scheme = self.methods.get(method_name)?;
+        if let Some(subst) = type_scheme.ty.assume_subst(ty)
+            && subst
+                .keys()
+                .all(|k| self.bound_vars.contains(k) || type_scheme.bound_vars.contains(k))
+        {
+            Some(subst)
+        } else {
+            None
+        }
+    }
 }
 #[derive(Clone)]
 pub struct TypeClassRef(pub Rc<TypeClass>);
@@ -235,5 +267,73 @@ impl Instance {
             map.insert(name.clone(), type_scheme.subst(&self.assigned_types_map()));
         }
         map
+    }
+    pub fn assume_subst(&self, other: &Instance, subst: &mut FxHashMap<TyVar, Type>) -> bool {
+        if self.class != other.class {
+            return false;
+        }
+        for (l_ty, r_ty) in self.assigned_types.iter().zip(other.assigned_types.iter()) {
+            if !l_ty.assume_subst_inner(r_ty, subst) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InstanceScheme {
+    pub bound_vars: Vector<TyVar>,
+    pub instance: Rc<Instance>,
+    pub constraints: Vector<Rc<Instance>>,
+}
+impl InstanceScheme {
+    pub fn subst(&self, subst: &FxHashMap<TyVar, Type>) -> InstanceScheme {
+        InstanceScheme {
+            bound_vars: self.bound_vars.clone(),
+            instance: Rc::new(self.instance.subst(subst)),
+            constraints: self
+                .constraints
+                .iter()
+                .map(|instance| Rc::new(instance.subst(subst)))
+                .collect(),
+        }
+    }
+    pub fn assume_subst(&self, instance: &Instance) -> Option<FxHashMap<TyVar, Type>> {
+        let mut subst = FxHashMap::default();
+        if InstanceScheme::assume_subst_inner(&self.instance, instance, &mut subst)
+            && subst.keys().all(|k| self.bound_vars.contains(k))
+        {
+            Some(subst)
+        } else {
+            None
+        }
+    }
+    fn assume_subst_inner(l: &Instance, r: &Instance, subst: &mut FxHashMap<TyVar, Type>) -> bool {
+        if l.class != r.class {
+            return false;
+        }
+        for (l_ty, r_ty) in l.assigned_types.iter().zip(r.assigned_types.iter()) {
+            if !l_ty.assume_subst_inner(r_ty, subst) {
+                return false;
+            }
+        }
+        true
+    }
+    pub fn method_type_assume_subst(
+        &self,
+        method_name: &Rc<str>,
+        ty: &Type,
+    ) -> Option<FxHashMap<TyVar, Type>> {
+        let type_scheme = self.instance.method_type_scheme(method_name)?;
+        if let Some(subst) = type_scheme.ty.assume_subst(ty)
+            && subst
+                .keys()
+                .all(|k| self.bound_vars.contains(k) || type_scheme.bound_vars.contains(k))
+        {
+            Some(subst)
+        } else {
+            None
+        }
     }
 }

@@ -1313,11 +1313,21 @@ impl<'a> StdLibDefiner<'a> {
     }
     pub fn def_io_functions(&mut self) {
         self.def_func(
-            "print",
+            "putStrLn",
             Type::arrow(Type::String, Type::Unit),
             native_func!(_runner,
                 Object::String(s) => {
                     println!("{}", s);
+                    Ok(Rc::new(Object::Unit))
+                }
+            ),
+        );
+        self.def_func(
+            "putStr",
+            Type::arrow(Type::String, Type::Unit),
+            native_func!(_runner,
+                Object::String(s) => {
+                    print!("{}", s);
                     Ok(Rc::new(Object::Unit))
                 }
             ),

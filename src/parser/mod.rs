@@ -80,17 +80,19 @@ fn expr<'stream>(
             just(Token::Dot).ignore_then(ident).repeated(),
             move |e, name| Rc::new(Expr::Member(e, name)),
         );
-        let expr2 = expr1.clone().foldl(expr1.repeated(), move |f, param| {
+        let expr2 = just(Token::Apostrophe)
+            .repeated()
+            .foldr(expr1, move |op, e| Rc::new(Expr::UnOp(op, e)));
+        let expr3 = expr2.clone().foldl(expr2.repeated(), move |f, param| {
             Rc::new(Expr::AppFun(f, param))
         });
-        let expr3 = choice((
+        let expr4 = choice((
             just(Token::Minus),
             just(Token::Exclamation),
-            just(Token::Apostrophe),
         ))
         .repeated()
-        .foldr(expr2, move |op, e| Rc::new(Expr::UnOp(op, e)));
-        bin_ops(expr3)
+        .foldr(expr3, move |op, e| Rc::new(Expr::UnOp(op, e)));
+        bin_ops(expr4)
     })
 }
 fn bin_ops<'stream>(

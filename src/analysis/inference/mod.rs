@@ -434,6 +434,8 @@ impl InferencePool {
             Expr::Def(name, assigned_expr, kind_like) => {
                 let type_scheme = self.eval_kindlike(kind_like)?;
                 let ty = Typing::from(&type_scheme.ty, &FxHashMap::default());
+                let var_ty = VarType::Def(type_scheme);
+                self.scope.vars.insert(name.clone(), var_ty.clone());
                 let assigned_ty = self.infer(assigned_expr.clone())?;
                 unify(
                     &assigned_ty,
@@ -441,8 +443,6 @@ impl InferencePool {
                     &mut self.tmp_var_arena,
                     assigned_expr.clone(),
                 )?;
-                let var_ty = VarType::Def(type_scheme);
-                self.scope.vars.insert(name.clone(), var_ty.clone());
                 self.let_type.insert(ExprRef(expr), var_ty);
                 Ok(Typing::Unit)
             }
@@ -600,6 +600,12 @@ impl InferencePool {
                     ty: type_scheme.clone(),
                     constraints: constraints.clone(),
                 });
+                program_data_builder
+                    .new_scope
+                    .insert(name.clone(), (new_var_id, type_scheme.clone()));
+                program_data_builder
+                    .let_var_id
+                    .insert(ExprRef(expr.clone()), new_var_id);
                 let old_constraints = program_data_builder.constraints.clone();
                 for (constraint, constraint_id) in type_scheme.constraints.iter().zip(constraints) {
                     program_data_builder
@@ -611,12 +617,6 @@ impl InferencePool {
                 self.set_program_data(assigned_expr.clone(), program_data_builder)?;
                 program_data_builder.constraints = old_constraints;
 
-                program_data_builder
-                    .let_var_id
-                    .insert(ExprRef(expr.clone()), new_var_id);
-                program_data_builder
-                    .new_scope
-                    .insert(name.clone(), (new_var_id, type_scheme));
                 Ok(())
             }
             Expr::Let(name, assigned_expr, _) => {

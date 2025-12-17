@@ -6,7 +6,7 @@ use indoc::indoc;
 
 fn main() {
     let src = indoc! {r#"
-    zip [0, 2, 3] ["zero", "two", "three"] |> show .> print;
+    def undefined: forall a. a = undefined
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");

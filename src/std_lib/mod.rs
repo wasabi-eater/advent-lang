@@ -350,7 +350,7 @@ impl<'a> StdLibDefiner<'a> {
                     "show",
                     native_func!(_runner,
                         Object::String(s) => {
-                            Ok(Rc::new(Object::String(s.clone())))
+                            Ok(Rc::new(Object::String(Rc::new(format!("\"{}\"", s.escape_debug())))))
                         }
                     ),
                 )

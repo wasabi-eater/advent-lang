@@ -6,7 +6,7 @@ use indoc::indoc;
 
 fn main() {
     let src = indoc! {r#"
-    def undefined: forall a. a = undefined
+    flip const 4 3
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");

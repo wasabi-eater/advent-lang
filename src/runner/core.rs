@@ -7,11 +7,42 @@ use itertools::Itertools;
 use crate::{
     analysis::program_data::{
         ConstraintAssign, ExprRef, IdentRef, InstanceDefId, InstanceRef, ProgramData, VarId,
-    },
-    ast::Expr,
-    runner::obj::Func,
-    std_lib,
+    }, ast::Expr, lexer::Token, runner::obj::Func, std_lib
 };
+
+macro_rules! native_func {
+    ($runner_ident:ident, $p:pat => $body:expr) => {
+        Object::Func(Func::NativeFunc(Rc::new(
+            move |$runner_ident: &mut Runner, arg: Rc<Object>| match &*arg {
+                $p => $body,
+                #[allow(unreachable_patterns)]
+                _ => panic!("invalid argument type for native function"),
+            },
+        )))
+    };
+}
+
+macro_rules! curry {
+    ([$($captured:ident),*], $runner_ident: ident, $p:pat => $body:expr) => {
+        native_func!(_runner_ident,
+            arg0 => {
+                let arg0 = arg0.clone();
+                $(let $captured = $captured.clone();)*
+                Ok(Rc::new(native_func!($runner_ident,
+                    arg1 => {
+                        let arg0 = arg0.clone();
+                        let arg1 = arg1.clone();
+                        match (arg0, arg1) {
+                            $p => $body,
+                            #[allow(unreachable_patterns)]
+                            _ => panic!("invalid argument types for curried native function"),
+                        }
+                    }
+                )))
+            }
+        )
+    };
+}
 
 pub struct Runner {
     program_data: ProgramData,
@@ -151,6 +182,14 @@ impl Runner {
                     })),
                 );
                 Ok(Rc::new(Object::Unit))
+            }
+            Expr::UnOp(Token::Apostrophe, expr) => {
+                let expr = expr.clone();
+                Ok(Rc::new(native_func!(runner,
+                    Object::Unit => {
+                        runner.eval(expr.clone())
+                    }
+                )))
             }
             Expr::BinOp(_, _, _) => unreachable!(),
             Expr::UnOp(_, _) => unreachable!(),

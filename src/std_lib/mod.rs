@@ -47,6 +47,34 @@ macro_rules! curry {
         )
     };
 }
+macro_rules! curry3 {
+    ([$($captured:ident),*], $runner_ident: ident, $p:pat => $body:expr) => {
+        native_func!(_runner_ident,
+            arg0 => {
+                let arg0 = arg0.clone();
+                $(let $captured = $captured.clone();)*
+                Ok(Rc::new(native_func!(_runner_ident,
+                    arg1 => {
+                        let arg0 = arg0.clone();
+                        let arg1 = arg1.clone();
+                        Ok(Rc::new(native_func!($runner_ident,
+                            arg2 => {
+                                let arg0 = arg0.clone();
+                                let arg1 = arg1.clone();
+                                let arg2 = arg2.clone();
+                                match (arg0, arg1, arg2) {
+                                    $p => $body,
+                                    #[allow(unreachable_patterns)]
+                                    _ => panic!("invalid argument types for curried native function"),
+                                }
+                            }
+                        )))
+                    }
+                )))
+            }
+        )
+    };
+}
 
 struct TypeClassBuilder {
     name: Rc<str>,
@@ -1034,7 +1062,7 @@ impl<'a> StdLibDefiner<'a> {
         );
     }
     fn def_list_functions(&mut self) {
-        let type_scheam = {
+        let type_sheme = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
@@ -1048,7 +1076,7 @@ impl<'a> StdLibDefiner<'a> {
         };
         self.def_func(
             "map",
-            type_scheam,
+            type_sheme,
             native_func!(_runner,
                 Object::Func(f) => {
                     let f = f.clone();
@@ -1066,7 +1094,7 @@ impl<'a> StdLibDefiner<'a> {
             ),
         );
 
-        let type_scheam = {
+        let type_sheme = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             TypeScheme::forall(
@@ -1079,7 +1107,7 @@ impl<'a> StdLibDefiner<'a> {
         };
         self.def_func(
             "filter",
-            type_scheam,
+            type_sheme,
             native_func!(_runner,
                 Object::Func(f) => {
                     let f = f.clone();
@@ -1102,7 +1130,7 @@ impl<'a> StdLibDefiner<'a> {
                 }
             ),
         );
-        let type_scheam = {
+        let type_sheme = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
@@ -1119,7 +1147,7 @@ impl<'a> StdLibDefiner<'a> {
         };
         self.def_func(
             "zip",
-            type_scheam,
+            type_sheme,
             curry!([], _runner,
                 (Object::List(list1), Object::List(list2)) => {
                     let len = std::cmp::min(list1.len(), list2.len());
@@ -1137,7 +1165,7 @@ impl<'a> StdLibDefiner<'a> {
         );
     }
     fn def_func_functions(&mut self) {
-        let type_scheam = {
+        let type_sheme = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
@@ -1155,7 +1183,7 @@ impl<'a> StdLibDefiner<'a> {
         };
         self.def_func(
             ".>",
-            type_scheam,
+            type_sheme,
             curry!([], _runner,
                 (Object::Func(f), Object::Func(g)) => {
                     Ok(Rc::new(Object::Func(
@@ -1164,7 +1192,7 @@ impl<'a> StdLibDefiner<'a> {
                 }
             ),
         );
-        let type_scheam = {
+        let type_sheme = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
@@ -1182,7 +1210,7 @@ impl<'a> StdLibDefiner<'a> {
         };
         self.def_func(
             "<.",
-            type_scheam,
+            type_sheme,
             curry!([], _runner,
                 (Object::Func(g), Object::Func(f)) => {
                     Ok(Rc::new(Object::Func(
@@ -1192,7 +1220,7 @@ impl<'a> StdLibDefiner<'a> {
             ),
         );
 
-        let type_scheam = {
+        let type_sheme = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
@@ -1206,7 +1234,7 @@ impl<'a> StdLibDefiner<'a> {
         };
         self.def_func(
             "|>",
-            type_scheam,
+            type_sheme,
             curry!([], runner,
                 (arg, Object::Func(f)) => {
                     let result = runner.call(&f, Rc::new(arg.clone()))?;
@@ -1215,7 +1243,7 @@ impl<'a> StdLibDefiner<'a> {
             ),
         );
 
-        let type_scheam = {
+        let type_sheme = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
@@ -1229,7 +1257,7 @@ impl<'a> StdLibDefiner<'a> {
         };
         self.def_func(
             "<|",
-            type_scheam,
+            type_sheme,
             curry!([], runner,
                 (Object::Func(f), arg) => {
                     let result = runner.call(&f, Rc::new(arg))?;
@@ -1237,20 +1265,68 @@ impl<'a> StdLibDefiner<'a> {
                 }
             ),
         );
-        let type_scheam = {
+        let type_sheme = {
             let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
             TypeScheme::forall([a], Type::arrow(Type::Var(a), Type::Var(a)))
         };
         self.def_func(
             "id",
-            type_scheam,
+            type_sheme,
             native_func!(_runner,
                 arg => Ok(Rc::new(arg.clone()))
             ),
         );
+
+        let type_scheme = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+            TypeScheme::forall(
+                [a, b],
+                Type::arrow(
+                    Type::Var(a),
+                    Type::arrow(Type::Var(b), Type::Var(a)),
+                ),
+            )
+        };
+        self.def_func(
+            "const",
+            type_scheme,
+            curry!([], _runner,
+                (arg1, _arg2) => {
+                    Ok(Rc::new(arg1.clone()))
+                }
+            ),
+        );
+
+        let type_scheme = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+            let c = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("c"));
+            TypeScheme::forall(
+                [a, b, c],
+                Type::arrow(
+                    Type::arrow(Type::Var(a), Type::arrow(Type::Var(b), Type::Var(c))),
+                    Type::arrow(Type::Var(b), Type::arrow(Type::Var(a), Type::Var(c))),
+                )
+            )
+        };
+        self.def_func(
+            "flip",
+            type_scheme,
+            curry3!([], runner,
+                (Object::Func(f), y, x) => {
+                    let result = runner.call(&f, Rc::new(x.clone()))?;
+                    let Object::Func(f2) = &*result else {
+                        panic!("expected function from flip");
+                    };
+                    let final_result = runner.call(f2, Rc::new(y.clone()))?;
+                    Ok(final_result)
+                }
+            )
+        );
     }
     pub fn def_comma_functions(&mut self) {
-        let type_scheam = {
+        let type_sheme = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
@@ -1264,7 +1340,7 @@ impl<'a> StdLibDefiner<'a> {
         };
         self.def_func(
             ",",
-            type_scheam,
+            type_sheme,
             curry!([], _runner,
                 (left, right) => {
                     Ok(Rc::new(Object::Comma(
@@ -1274,7 +1350,7 @@ impl<'a> StdLibDefiner<'a> {
                 }
             ),
         );
-        let type_scheam = {
+        let type_sheme = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
@@ -1285,14 +1361,14 @@ impl<'a> StdLibDefiner<'a> {
         };
         self.def_func(
             "fst",
-            type_scheam,
+            type_sheme,
             native_func!(_runner,
                 Object::Comma(left, _right) => {
                     Ok(left.clone())
                 }
             ),
         );
-        let type_scheam = {
+        let type_sheme = {
             let tyvar_arena = self.inference_pool.tyvar_arena();
             let a = tyvar_arena.alloc(TyVarBody::new("a"));
             let b = tyvar_arena.alloc(TyVarBody::new("b"));
@@ -1303,7 +1379,7 @@ impl<'a> StdLibDefiner<'a> {
         };
         self.def_func(
             "snd",
-            type_scheam,
+            type_sheme,
             native_func!(_runner,
                 Object::Comma(_left, right) => {
                     Ok(right.clone())

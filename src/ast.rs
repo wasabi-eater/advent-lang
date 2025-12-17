@@ -28,10 +28,15 @@ pub enum Kind {
     Comma(Rc<Kind>, Rc<Kind>),
     List(Rc<Kind>),
 }
-
+#[derive(Clone, PartialEq, Eq)]
+pub struct Constraint {
+    pub type_class: Rc<str>,
+    pub args: Vec<Rc<Kind>>,
+}
 #[derive(Clone, PartialEq, Eq)]
 pub struct KindLike {
     pub bound_vars: Vec<Rc<str>>,
+    pub constraints: Vec<Constraint>,
     pub kind: Rc<Kind>,
 }
 
@@ -100,6 +105,30 @@ impl Debug for KindLike {
             }
             is_first = false;
         }
-        write!(f, ". {:?}", self.kind)
+        f.write_str(". ")?;
+        if !self.constraints.is_empty() {
+            f.write_str("(")?;
+            let mut is_first = true;
+            for constraint in &self.constraints {
+                if is_first {
+                    write!(f, "{constraint:?}")?;
+                } else {
+                    write!(f, ", {constraint:?}")?;
+                }
+                is_first = false;
+            }
+            f.write_str(") => ")?;
+        }
+        write!(f, "{:?}", self.kind)
+    }
+}
+
+impl Debug for Constraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.type_class)?;
+        for arg in self.args.iter() {
+            write!(f, " {arg:?}")?;
+        }
+        Ok(())
     }
 }

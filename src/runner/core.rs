@@ -7,7 +7,11 @@ use itertools::Itertools;
 use crate::{
     analysis::program_data::{
         ConstraintAssign, ExprRef, IdentRef, InstanceDefId, InstanceRef, ProgramData, VarId,
-    }, ast::Expr, lexer::Token, runner::obj::Func, std_lib
+    },
+    ast::Expr,
+    lexer::Token,
+    runner::obj::Func,
+    std_lib,
 };
 
 macro_rules! native_func {

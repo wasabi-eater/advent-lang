@@ -1,7 +1,7 @@
 use crate::{
     analysis::{
         inference::{TmpTyVarArena, TmpTyVarId, typing::Typing},
-        types::Instance,
+        types::{Instance, TypeClassRef},
     },
     ast::Expr,
 };
@@ -25,6 +25,16 @@ pub enum Error {
     IntegerOutOfSize(Rc<Expr>),
     MissingInstance {
         instance: Rc<Instance>,
+    },
+    ImperfectInstanceParam {
+        type_class: TypeClassRef,
+        shortage_param_count: usize,
+    },
+    TooManyInstanceParam {
+        type_class: TypeClassRef,
+    },
+    UnknownTypeClassName {
+        type_class_name: Rc<str>,
     },
 }
 pub type Result<T> = std::result::Result<T, Error>;
@@ -62,6 +72,22 @@ impl Debug for Error {
                     "missing instance: {}({:?})",
                     instance.class.0.name, instance.assigned_types
                 )
+            }
+            Self::ImperfectInstanceParam {
+                type_class,
+                shortage_param_count,
+            } => {
+                write!(
+                    f,
+                    "imperfect instance param count for {}: shortage {} param(s)",
+                    type_class.0.name, shortage_param_count
+                )
+            }
+            Self::UnknownTypeClassName { type_class_name } => {
+                write!(f, "unknown type class name: {}", type_class_name)
+            }
+            Self::TooManyInstanceParam { type_class } => {
+                write!(f, "too many instance param count for {}", type_class.0.name)
             }
         }
     }

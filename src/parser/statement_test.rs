@@ -105,7 +105,42 @@ fn type_declaration_test() {
             Expr::Ident("panic".into()).into(),
             KindLike {
                 bound_vars: vec!["a".into()],
+                constraints: vec![],
                 kind: Kind::Ident("a".into()).into()
+            }
+        )
+        .into())
+    );
+
+    let input = [
+        Token::Def,
+        Token::Ident("print".into()),
+        Token::Colon,
+        Token::Forall,
+        Token::Ident("a".into()),
+        Token::Dot,
+        Token::Ident("Show".into()),
+        Token::Ident("a".into()),
+        Token::BigArrow,
+        Token::Ident("a".into()),
+        Token::SmallArrow,
+        Token::ParenOpen,
+        Token::ParenClose,
+        Token::Equal,
+        Token::Ident("unimplemented".into()),
+    ];
+    assert_eq!(
+        parser().parse(&input).into_result(),
+        Ok(Expr::Def(
+            "print".into(),
+            Expr::Ident("unimplemented".into()).into(),
+            KindLike {
+                bound_vars: vec!["a".into()],
+                constraints: vec![Constraint {
+                    type_class: "Show".into(),
+                    args: vec![Kind::Ident("a".into()).into()]
+                }],
+                kind: Kind::Arrow(Kind::Ident("a".into()).into(), Kind::Unit.into()).into()
             }
         )
         .into())
@@ -158,4 +193,50 @@ fn statements_test() {
             .into()
         ])
     )
+}
+
+#[test]
+fn constraint_test() {
+    let input = [Token::Ident("Show".into()), Token::Ident("a".into())];
+    assert_eq!(
+        constraint().parse(&input).into_result(),
+        Ok(Constraint {
+            type_class: "Show".into(),
+            args: vec![Kind::Ident("a".into()).into()]
+        })
+    );
+}
+
+#[test]
+fn constraints_test() {
+    let input = [
+        Token::ParenOpen,
+        Token::Ident("Show".into()),
+        Token::Ident("a".into()),
+        Token::Comma,
+        Token::Ident("Eq".into()),
+        Token::Ident("a".into()),
+        Token::ParenClose,
+    ];
+    assert_eq!(
+        constraints().parse(&input).into_result(),
+        Ok(vec![
+            Constraint {
+                type_class: "Show".into(),
+                args: vec![Kind::Ident("a".into()).into()]
+            },
+            Constraint {
+                type_class: "Eq".into(),
+                args: vec![Kind::Ident("a".into()).into()]
+            },
+        ])
+    );
+    let input = [Token::Ident("Show".into()), Token::Ident("a".into())];
+    assert_eq!(
+        constraints().parse(&input).into_result(),
+        Ok(vec![Constraint {
+            type_class: "Show".into(),
+            args: vec![Kind::Ident("a".into()).into()]
+        },])
+    );
 }

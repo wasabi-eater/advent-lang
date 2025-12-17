@@ -6,7 +6,8 @@ use indoc::indoc;
 
 fn main() {
     let src = indoc! {r#"
-    '2 ()
+    def print: forall a. Show a => a -> () = show .> putStrLn;
+    print [[0], [1, 2]];
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");

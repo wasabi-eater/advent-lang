@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Expr, Kind, KindLike},
+    ast::{Constraint, Expr, Kind, KindLike},
     lexer::Token,
 };
 use chumsky::prelude::*;
@@ -86,12 +86,9 @@ fn expr<'stream>(
         let expr3 = expr2.clone().foldl(expr2.repeated(), move |f, param| {
             Rc::new(Expr::AppFun(f, param))
         });
-        let expr4 = choice((
-            just(Token::Minus),
-            just(Token::Exclamation),
-        ))
-        .repeated()
-        .foldr(expr3, move |op, e| Rc::new(Expr::UnOp(op, e)));
+        let expr4 = choice((just(Token::Minus), just(Token::Exclamation)))
+            .repeated()
+            .foldr(expr3, move |op, e| Rc::new(Expr::UnOp(op, e)));
         bin_ops(expr4)
     })
 }
@@ -158,21 +155,29 @@ fn infix<'stream>(
         })
         .boxed()
 }
+fn kind_term<'stream>(
+    kind: impl Parser<'stream, &'stream [Token], Rc<Kind>> + Clone,
+) -> impl Parser<'stream, &'stream [Token], Rc<Kind>> + Clone {
+    let ident = select! {
+        Token::Ident(name) => Rc::new(Kind::Ident(name))
+    };
+    let paren = kind
+        .clone()
+        .then_ignore(just(Token::Comma))
+        .repeated()
+        .foldr(kind.clone(), |l, r| Rc::new(Kind::Comma(l, r)))
+        .delimited_by(just(Token::ParenOpen), just(Token::ParenClose));
+    let list = kind
+        .delimited_by(just(Token::BracketOpen), just(Token::BracketClose))
+        .map(|inner| Rc::new(Kind::List(inner)));
+    let unit = just(Token::ParenOpen)
+        .then(just(Token::ParenClose))
+        .to(Rc::new(Kind::Unit));
+    choice((ident, paren, list, unit))
+}
 fn kind<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Kind>> + Clone {
     recursive(|kind| {
-        let ident = select! {
-            Token::Ident(name) => Rc::new(Kind::Ident(name))
-        };
-        let paren = kind
-            .clone()
-            .then_ignore(just(Token::Comma))
-            .repeated()
-            .foldr(kind.clone(), |l, r| Rc::new(Kind::Comma(l, r)))
-            .delimited_by(just(Token::ParenOpen), just(Token::ParenClose));
-        let list = kind
-            .delimited_by(just(Token::BracketOpen), just(Token::BracketClose))
-            .map(|inner| Rc::new(Kind::List(inner)));
-        let term = choice((ident, paren, list));
+        let term = kind_term(kind);
         let app = term
             .clone()
             .foldl(term.repeated(), |f, p| Rc::new(Kind::App(f, p)));
@@ -182,8 +187,7 @@ fn kind<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Kind>> + Clone {
             .foldr(app, |l, r| Rc::new(Kind::Arrow(l, r)))
     })
 }
-fn kind_like<'a: 'stream, 'stream, 's: 'a + 'stream>()
--> impl Parser<'stream, &'stream [Token], KindLike> + Clone {
+fn kind_like<'stream>() -> impl Parser<'stream, &'stream [Token], KindLike> + Clone {
     let var = select! {
         Token::Ident(name) => name
     };
@@ -194,6 +198,27 @@ fn kind_like<'a: 'stream, 'stream, 's: 'a + 'stream>()
         .or_not()
         .map(|opt| opt.unwrap_or(Vec::default()));
     bound_vars
+        .then(constraints().then_ignore(just(Token::BigArrow)).or_not())
         .then(kind())
-        .map(|(bound_vars, kind)| KindLike { bound_vars, kind })
+        .map(|((bound_vars, constraints), kind)| KindLike {
+            bound_vars,
+            kind,
+            constraints: constraints.unwrap_or(vec![]),
+        })
+}
+
+fn constraint<'stream>() -> impl Parser<'stream, &'stream [Token], Constraint> + Clone {
+    let type_class_name = select! {
+        Token::Ident(name) => name
+    };
+    type_class_name
+        .then(kind_term(kind()).repeated().collect::<Vec<_>>())
+        .map(|(type_class, args)| Constraint { type_class, args })
+}
+fn constraints<'stream>() -> impl Parser<'stream, &'stream [Token], Vec<Constraint>> + Clone {
+    constraint()
+        .separated_by(just(Token::Comma))
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
+        .or(constraint().map(|c| vec![c]))
 }

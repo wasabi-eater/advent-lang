@@ -476,10 +476,36 @@ impl InferencePool {
             .collect();
         name_ty_map.extend(Self::std_defined_type_name());
         let ty = self.eval_kind(&kind_like.kind, &name_ty_map)?;
+        let constraints: Vector<Rc<Instance>> = kind_like
+            .constraints
+            .iter()
+            .map(|constraint| self.eval_constraint(constraint, &name_ty_map))
+            .map_ok(Rc::new)
+            .try_collect()?;
         Ok(TypeScheme {
             bound_vars: name_tyvar_map.into_values().collect(),
             ty: Rc::new(ty),
-            constraints: Vector::new(),
+            constraints,
+        })
+    }
+    fn eval_constraint(
+        &mut self,
+        constraint: &ast::Constraint,
+        name_ty_map: &FxHashMap<Rc<str>, Type>,
+    ) -> errors::Result<Instance> {
+        let type_class = self
+            .type_classes
+            .get(&constraint.type_class)
+            .ok_or_else(|| errors::Error::UndefiedIdent(constraint.type_class.clone()))?
+            .clone();
+        let args = constraint
+            .args
+            .iter()
+            .map(|arg| self.eval_kind(arg, name_ty_map))
+            .collect::<errors::Result<Vector<Type>>>()?;
+        Ok(Instance {
+            class: type_class,
+            assigned_types: args,
         })
     }
     fn eval_kind(

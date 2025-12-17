@@ -1282,10 +1282,7 @@ impl<'a> StdLibDefiner<'a> {
             let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
             TypeScheme::forall(
                 [a, b],
-                Type::arrow(
-                    Type::Var(a),
-                    Type::arrow(Type::Var(b), Type::Var(a)),
-                ),
+                Type::arrow(Type::Var(a), Type::arrow(Type::Var(b), Type::Var(a))),
             )
         };
         self.def_func(
@@ -1307,7 +1304,7 @@ impl<'a> StdLibDefiner<'a> {
                 Type::arrow(
                     Type::arrow(Type::Var(a), Type::arrow(Type::Var(b), Type::Var(c))),
                     Type::arrow(Type::Var(b), Type::arrow(Type::Var(a), Type::Var(c))),
-                )
+                ),
             )
         };
         self.def_func(
@@ -1322,7 +1319,7 @@ impl<'a> StdLibDefiner<'a> {
                     let final_result = runner.call(f2, Rc::new(y.clone()))?;
                     Ok(final_result)
                 }
-            )
+            ),
         );
     }
     pub fn def_comma_functions(&mut self) {

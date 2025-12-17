@@ -544,7 +544,7 @@ impl<'a> StdLibDefiner<'a> {
                         Rc::new(curry!([], _runner,
                             (Object::List(mut x), Object::List(y)) => {
                                 x.append(y);
-                                Ok(Rc::new(Object::List(Vector::from(x))))
+                                Ok(Rc::new(Object::List(x)))
                             }
                         )),
                     )

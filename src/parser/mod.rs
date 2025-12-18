@@ -114,18 +114,18 @@ fn expr<'a>(
 fn bin_ops<'a>(
     term: impl Parser<'a, &'a [Token], Rc<Expr>> + Clone + 'a,
 ) -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
-    let expr3 = infixl(term, just(Token::CompositionLeft));
-    let expr4 = infixl(expr3, just(Token::CompositionRight));
-    let expr5 = infixl(
-        expr4,
+    let expr0 = infixl(term, just(Token::CompositionLeft));
+    let expr1 = infixl(expr0, just(Token::CompositionRight));
+    let expr2 = infixl(
+        expr1,
         choice((just(Token::Mul), just(Token::Div), just(Token::Mod))),
     );
-    let expr6 = infixl(expr5, choice((just(Token::Plus), just(Token::Minus))));
-    let expr7 = infixl(expr6, just(Token::ShiftLeft).or(just(Token::ShiftRight)));
-    let expr8 = infixl(expr7, just(Token::Amp));
-    let expr9 = infixl(expr8, just(Token::Pipe));
-    let expr10 = infix(
-        expr9,
+    let expr3 = infixl(expr2, choice((just(Token::Plus), just(Token::Minus))));
+    let expr4 = infixl(expr3, just(Token::ShiftLeft).or(just(Token::ShiftRight)));
+    let expr5 = infixl(expr4, just(Token::Amp));
+    let expr6 = infixl(expr5, just(Token::Pipe));
+    let expr7 = infix(
+        expr6,
         choice((
             just(Token::Greater),
             just(Token::Less),
@@ -133,14 +133,14 @@ fn bin_ops<'a>(
             just(Token::LessEqual),
         )),
     );
-    let expr11 = infix(
-        expr10,
+    let expr8 = infix(
+        expr7,
         choice((just(Token::DoubleEqual), just(Token::NotEqual))),
     );
-    let expr12 = infixl(expr11, just(Token::DoubleAmp));
-    let expr13 = infixl(expr12, just(Token::DoublePipe));
-    let expr14 = infixr(expr13, just(Token::PipeLeft));
-    infixl(expr14.clone(), just(Token::PipeRight))
+    let expr9 = infixl(expr8, just(Token::DoubleAmp));
+    let expr10 = infixl(expr9, just(Token::DoublePipe));
+    let expr11 = infixr(expr10, just(Token::PipeLeft));
+    infixl(expr11.clone(), just(Token::PipeRight))
 }
 fn infixl<'a>(
     expr: impl Parser<'a, &'a [Token], Rc<Expr>> + Clone + 'a,

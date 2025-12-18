@@ -1,0 +1,13 @@
+let fizz_buzz = {\i ->
+    if (i % 15 == 0) '"FizzBuzz"
+    '(if (i % 5 == 0) '"Fizz"
+    '(if (i % 3 == 0) '"Buzz"
+    '(show i)))
+};
+
+def range: Int -> Int -> [Int] = {\s e ->
+    if (s == e) '[]
+    '([s] + range(s + 1) e)
+};
+
+range 1 100 |> map fizz_buzz |> print

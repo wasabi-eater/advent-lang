@@ -4,6 +4,7 @@ use advent_lang::{
     analysis::inference::InferencePool, lexer, parser, runner::core::Runner, std_lib::StdLibDefiner,
 };
 use chumsky::Parser;
+use std::thread;
 
 #[derive(clap::Parser)]
 struct Arg {
@@ -17,8 +18,17 @@ fn main() {
         .expect("File open failed!")
         .read_to_string(&mut buffer)
         .expect("File read failed!");
-    let tokens = lexer::tokenize(&buffer).expect("Tokenize failed!");
-    buffer.clear();
+    let builder = thread::Builder::new().stack_size(1024 * 1024 * 16);
+    let handler = builder
+        .spawn(move || {
+            build_and_run(&buffer);
+        })
+        .expect("Thread spawn failed!");
+    handler.join().expect("Thread join failed!");
+}
+
+fn build_and_run(src: &str) {
+    let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");
     let result = parser::program().parse(&tokens).into_result();
     let ast = match result {
@@ -46,6 +56,7 @@ fn main() {
             return;
         }
     };
+
     println!("run!");
     let mut runner = Runner::new(program_data, std_lib);
     match runner.eval(ast) {

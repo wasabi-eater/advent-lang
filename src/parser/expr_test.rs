@@ -207,7 +207,8 @@ fn lambda_test() {
                     Expr::LitInt("1".into()).into()
                 )
                 .into()
-            ]).into()
+            ])
+            .into()
         )
         .into())
     );

@@ -328,7 +328,7 @@ impl InferencePool {
             return Ok(expr_typing.typing.clone());
         }
         let typing = self.infer_inner(expr.clone())?;
-        println!("{expr:?} {typing:?}");
+        // println!("{expr:?} {typing:?}");
         self.expr_typing.insert(
             ExprRef(expr.clone()),
             ExprTyping {
@@ -363,7 +363,7 @@ impl InferencePool {
                 let scope = self.scope.clone();
                 self.scope.implicit_arg_count = Some(0);
                 self.scope.implicit_arg_types = Vector::new();
-                for stmt in statements {                
+                for stmt in statements {
                     self.set_implicit_index(stmt.clone())?;
                 }
                 let count = self.scope.implicit_arg_count.unwrap();
@@ -382,8 +382,9 @@ impl InferencePool {
                     .fold(last_ty, |acc, implicit_arg_ty| {
                         Typing::Arrow(implicit_arg_ty.clone().into(), acc.into())
                     });
-                self.partial_app_arg_types.insert(ExprRef(expr.clone()), self.scope.implicit_arg_types.clone());
-                println!("len = {}", self.scope.implicit_arg_types.len());
+                self.partial_app_arg_types
+                    .insert(ExprRef(expr.clone()), self.scope.implicit_arg_types.clone());
+                // println!("len = {}", self.scope.implicit_arg_types.len());
                 self.scope = scope;
                 Ok(ty)
             }
@@ -489,9 +490,9 @@ impl InferencePool {
                 self.scope = old_scope;
                 Ok(Typing::Arrow(pat_ty.into(), body_ty.into()))
             }
-            Expr::ImplicitArg => {
-                Ok(self.scope.implicit_arg_types[self.implicit_arg_index[&ExprRef(expr.clone())]].clone())
-            }
+            Expr::ImplicitArg => Ok(self.scope.implicit_arg_types
+                [self.implicit_arg_index[&ExprRef(expr.clone())]]
+                .clone()),
         }
     }
     fn infer_pat(&mut self, pattern: Rc<Pattern>) -> errors::Result<Typing> {
@@ -530,22 +531,20 @@ impl InferencePool {
             Expr::AppFun(f, p) => {
                 self.set_implicit_index(f.clone())?;
                 self.set_implicit_index(p.clone())
-            },
-            Expr::UnOp(_, operand) => {
-                self.set_implicit_index(operand.clone())
-            },
+            }
+            Expr::UnOp(_, operand) => self.set_implicit_index(operand.clone()),
             Expr::BinOp(l, _, r) => {
                 self.set_implicit_index(l.clone())?;
                 self.set_implicit_index(r.clone())
-            },
+            }
             Expr::Ident(_) => Ok(()),
-            Expr::LitBool(_) | Expr::LitStr(_) | Expr::LitInt(_) | Expr::LitFloat(_) | Expr::Unit => Ok(()),
-            Expr::Let(_, assigned_expr, _) => {
-                self.set_implicit_index(assigned_expr.clone())
-            }
-            Expr::Def(_, assigned_expr, _) => {
-                self.set_implicit_index(assigned_expr.clone())
-            }
+            Expr::LitBool(_)
+            | Expr::LitStr(_)
+            | Expr::LitInt(_)
+            | Expr::LitFloat(_)
+            | Expr::Unit => Ok(()),
+            Expr::Let(_, assigned_expr, _) => self.set_implicit_index(assigned_expr.clone()),
+            Expr::Def(_, assigned_expr, _) => self.set_implicit_index(assigned_expr.clone()),
             Expr::LitList(items) => {
                 for item in items {
                     self.set_implicit_index(item.clone())?;
@@ -553,7 +552,7 @@ impl InferencePool {
                 Ok(())
             }
             Expr::Member(_, _) => todo!(),
-            Expr::Lambda(_, _) => Ok(())
+            Expr::Lambda(_, _) => Ok(()),
         }
     }
     fn std_defined_type_name() -> FxHashMap<Rc<str>, Type> {
@@ -671,17 +670,21 @@ impl InferencePool {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
-            constraints: im_rc::HashMap::default()
+            constraints: im_rc::HashMap::default(),
         };
         self.set_program_data(expr, &mut program_data_builder)?;
-        let partial_app_arg_types = self.partial_app_arg_types.into_iter().map(|(expr_ref, arg_types)| {
-            let types = arg_types
+        let partial_app_arg_types = self
+            .partial_app_arg_types
             .into_iter()
-            .map(|ty| ty.try_to_type(&mut self.tmp_var_arena))
-            .map_ok(Rc::new)
+            .map(|(expr_ref, arg_types)| {
+                let types = arg_types
+                    .into_iter()
+                    .map(|ty| ty.try_to_type(&mut self.tmp_var_arena))
+                    .map_ok(Rc::new)
+                    .try_collect()?;
+                Ok((expr_ref, types))
+            })
             .try_collect()?;
-            Ok((expr_ref, types))
-        }).try_collect()?;
         Ok(ProgramData {
             tyvar_arena: self.tyvar_arena,
             var_arena: self.var_arena,
@@ -831,13 +834,18 @@ impl InferencePool {
                         .collect(),
                 };
                 let instance_ref =
-                    self.get_instance_ref(program_data_builder, expected_instance)?;
+                    self.get_instance_ref(program_data_builder, expected_instance.clone())?;
                 let class = self.instance_arena.get_class_of_ref(&instance_ref);
                 let instance = self.instance_arena.get_instance(&instance_ref);
+                let mut instance_subst = FxHashMap::default();
+                assert!(instance.assume_subst(&expected_instance, &mut instance_subst));
+                let instance = instance.subst(&instance_subst);
                 let constraint_ids = &class.0.method_constraint_ids[name];
                 let method_type_scheme = instance.method_type_scheme(name).unwrap();
                 let constraints = &method_type_scheme.constraints;
-                let subst = method_type_scheme.assume_bound_vars_subst(&ty).unwrap();
+                let subst = method_type_scheme
+                    .assume_bound_vars_subst(&ty)
+                    .unwrap_or_else(|| panic!("failed to get subst for method {name}; method_type_scheme: {method_type_scheme:?}, ty: {ty:?}"));
 
                 let constraint_assign = constraint_ids
                     .iter()

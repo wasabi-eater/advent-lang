@@ -510,34 +510,29 @@ impl<'a> StdLibDefiner<'a> {
                 assigned_types: vector![Type::Var(a)],
             });
             TypeScheme::forall_with_constraints(
-            [a],
-            Type::arrow(Type::Var(a), Type::Unit),
-            [constraint])
+                [a],
+                Type::arrow(Type::Var(a), Type::Unit),
+                [constraint],
+            )
         };
-        self.def_func_with_constraints(
-            "print",
-            type_scheme,
-            |runner, constraints| {
-                let show_a = constraints[0].methods["show"].clone();
-                let show_a = runner
-                    .read_var(&show_a, im_rc::HashMap::default())
-                    .unwrap();
-                let Object::Func(show_a) = &*show_a else {
-                    panic!("expected function for show method")
-                };
-                let show_a = show_a.clone();
-                Rc::new(native_func!(_runner,
-                    arg => {
-                        let shown = _runner.call(&show_a, Rc::new(arg.clone()))?;
-                        let Object::String(shown) = &*shown else {
-                            panic!("expected String from show method")
-                        };
-                        println!("{}", shown);
-                        Ok(Rc::new(Object::Unit))
-                    }
-                ))
-            }
-        );
+        self.def_func_with_constraints("print", type_scheme, |runner, constraints| {
+            let show_a = constraints[0].methods["show"].clone();
+            let show_a = runner.read_var(&show_a, im_rc::HashMap::default()).unwrap();
+            let Object::Func(show_a) = &*show_a else {
+                panic!("expected function for show method")
+            };
+            let show_a = show_a.clone();
+            Rc::new(native_func!(_runner,
+                arg => {
+                    let shown = _runner.call(&show_a, Rc::new(arg.clone()))?;
+                    let Object::String(shown) = &*shown else {
+                        panic!("expected String from show method")
+                    };
+                    println!("{}", shown);
+                    Ok(Rc::new(Object::Unit))
+                }
+            ))
+        });
     }
     fn def_add_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
@@ -1208,16 +1203,10 @@ impl<'a> StdLibDefiner<'a> {
             TypeScheme::forall(
                 [a, b, c],
                 Type::arrow(
-                    Type::arrow(
-                        Type::Var(a),
-                        Type::arrow(Type::Var(b), Type::Var(c)),
-                    ),
+                    Type::arrow(Type::Var(a), Type::arrow(Type::Var(b), Type::Var(c))),
                     Type::arrow(
                         Type::list(Type::Var(a)),
-                        Type::arrow(
-                            Type::list(Type::Var(b)),
-                            Type::list(Type::Var(c)),
-                        ),
+                        Type::arrow(Type::list(Type::Var(b)), Type::list(Type::Var(c))),
                     ),
                 ),
             )
@@ -1434,8 +1423,10 @@ impl<'a> StdLibDefiner<'a> {
             let c = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("c"));
             TypeScheme::forall(
                 [a, b, c],
-                Type::arrow(Type::arrow(Type::comma(Type::Var(a), Type::Var(b)), Type::Var(c)),
-                Type::arrow(Type::Var(a), Type::arrow(Type::Var(b), Type::Var(c)))),
+                Type::arrow(
+                    Type::arrow(Type::comma(Type::Var(a), Type::Var(b)), Type::Var(c)),
+                    Type::arrow(Type::Var(a), Type::arrow(Type::Var(b), Type::Var(c))),
+                ),
             )
         };
         self.def_func(

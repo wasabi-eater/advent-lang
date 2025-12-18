@@ -74,15 +74,17 @@ fn expr<'stream>(
         let lambda_param = just(Token::Backslash)
             .ignore_then(pattern().repeated().collect::<Vec<_>>())
             .then_ignore(just(Token::SmallArrow));
-        let brace = lambda_param.or_not()
+        let brace = lambda_param
+            .or_not()
             .then(statements)
             .delimited_by(just(Token::BraceOpen), just(Token::BraceClose))
             .map(move |(param, stmts)| match param {
                 Some(params) => {
                     let body = Rc::new(Expr::Brace(stmts));
-                    params.into_iter().rev().fold(body, |acc, pat| {
-                        Rc::new(Expr::Lambda(pat, acc))
-                    })
+                    params
+                        .into_iter()
+                        .rev()
+                        .fold(body, |acc, pat| Rc::new(Expr::Lambda(pat, acc)))
                 }
                 None => Rc::new(Expr::Brace(stmts)),
             });
@@ -210,7 +212,8 @@ fn kind_like<'stream>() -> impl Parser<'stream, &'stream [Token], KindLike> + Cl
         Token::Ident(name) => name
     };
     let bound_vars = var
-        .repeated().at_least(1)
+        .repeated()
+        .at_least(1)
         .collect::<Vec<_>>()
         .delimited_by(just(Token::Forall), just(Token::Dot))
         .or_not()

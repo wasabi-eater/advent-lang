@@ -1,5 +1,5 @@
 use super::{errors, obj::Object};
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use fxhash::FxHashMap;
 use itertools::Itertools;
@@ -116,12 +116,14 @@ impl Runner {
                     .try_collect()?,
             ))),
             Expr::Unit => Ok(Rc::new(Object::Unit)),
-            Expr::Ident(_) => {
+            Expr::Ident(name) => {
                 let ident_ref = self.program_data.expr_ident_ref[&ExprRef(expr.clone())].clone();
 
                 let (data, mut given_instance) = match ident_ref {
                     IdentRef::Var(var_id, given_instance) => {
-                        let data = self.scope.vars[&var_id].clone();
+                        let data = self.scope.vars.get(&var_id).cloned().unwrap_or_else(|| {
+                            panic!("variable with id {var_id:?}(name: {name}) not found in scope")
+                        });
                         (data, given_instance)
                     }
                     IdentRef::Method(mut instance, method_name, given_instance) => {
@@ -137,18 +139,26 @@ impl Runner {
                 let data = self.read_var(&data, given_instance)?;
                 Ok(data)
             }
-            Expr::Brace(statements) if self.program_data.partial_app_arg_types[&ExprRef(expr.clone())].is_empty() => {
-                let old_scope = self.scope.clone();
+            Expr::Brace(statements)
+                if self.program_data.partial_app_arg_types[&ExprRef(expr.clone())].is_empty() =>
+            {
+                let out_scope = self.scope.clone();
                 let mut result = Rc::new(Object::Unit);
                 for expr in statements {
                     result = self.eval(expr.clone())?;
                 }
-                self.scope = old_scope;
+                self.scope = out_scope;
                 Ok(result)
             }
             Expr::Brace(_) => {
-                let implicit_arg_count = self.program_data.partial_app_arg_types[&ExprRef(expr.clone())].len();
-                Ok(Rc::new(Object::Func(Func::PartialApp(expr.clone(), self.scope.clone(), implicit_arg_count, im_rc::Vector::new()))))
+                let implicit_arg_count =
+                    self.program_data.partial_app_arg_types[&ExprRef(expr.clone())].len();
+                Ok(Rc::new(Object::Func(Func::PartialApp(
+                    expr.clone(),
+                    self.scope.clone(),
+                    implicit_arg_count,
+                    im_rc::Vector::new(),
+                ))))
             }
             Expr::Let(pattern, assigned_expr, _) => {
                 let obj = self.eval(assigned_expr.clone())?;
@@ -162,27 +172,36 @@ impl Runner {
                 Ok(Rc::new(Object::Func(Func::UserDefFunc(pat, body, scope))))
             }
             Expr::Def(_, assigned_expr, _) => {
-                let scope = self.scope.clone();
+                let scope = Rc::new(RefCell::new(self.scope.clone()));
                 let var_id = self.program_data.def_var_ids[&ExprRef(expr.clone())];
                 let assigned_expr = assigned_expr.clone();
-                self.scope.vars.insert(
-                    var_id,
-                    Variable::Def(Rc::new(move |runner: &mut Runner, instance_replace| {
-                        let old_scope = runner.scope.clone();
-                        runner.scope = scope.clone();
-                        runner.scope.instance_replace.extend(instance_replace);
-                        let result = runner.eval(assigned_expr.clone());
-                        runner.scope = old_scope;
-                        result
-                    })),
-                );
+                {
+                    let scope = scope.clone();
+                    self.scope.vars.insert(
+                        var_id,
+                        Variable::Def(Rc::new(move |runner: &mut Runner, instance_replace| {
+                            let out_scope = runner.scope.clone();
+                            runner.scope = scope.borrow().clone();
+                            runner.scope.instance_replace.extend(instance_replace);
+                            let result = runner.eval(assigned_expr.clone());
+                            runner.scope = out_scope;
+                            result
+                        })),
+                    );
+                }
+                *scope.borrow_mut() = self.scope.clone();
                 Ok(Rc::new(Object::Unit))
             }
             Expr::UnOp(Token::Apostrophe, expr) => {
+                let scope = self.scope.clone();
                 let expr = expr.clone();
                 Ok(Rc::new(native_func!(runner,
                     Object::Unit => {
-                        runner.eval(expr.clone())
+                        let out_scope = runner.scope.clone();
+                        runner.scope = scope.clone();
+                        let result = runner.eval(expr.clone());
+                        runner.scope = out_scope;
+                        result
                     }
                 )))
             }
@@ -224,18 +243,18 @@ impl Runner {
         match &func {
             Func::NativeFunc(inner) => inner(self, param),
             Func::UserDefFunc(pat, body, def_scope) => {
-                let old_scope = self.scope.clone();
+                let out_scope = self.scope.clone();
                 self.scope = def_scope.clone();
                 self.assign_pattern(pat.clone(), param)?;
                 let result = self.eval(body.clone());
-                self.scope = old_scope;
+                self.scope = out_scope;
                 result
             }
             Func::PartialApp(expr, scope, arg_count, args) => {
                 let mut new_args = args.clone();
                 new_args.push_back(param);
                 if new_args.len() == *arg_count {
-                    let old_scope = self.scope.clone();
+                    let out_scope = self.scope.clone();
                     self.scope = scope.clone();
                     self.scope.implicit_args = new_args;
                     let Expr::Brace(stmts) = &**expr else {
@@ -245,7 +264,7 @@ impl Runner {
                     for stmt in stmts {
                         result = self.eval(stmt.clone())?;
                     }
-                    self.scope = old_scope;
+                    self.scope = out_scope;
                     Ok(result)
                 } else {
                     Ok(Rc::new(Object::Func(Func::PartialApp(

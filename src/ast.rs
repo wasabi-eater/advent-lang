@@ -20,7 +20,7 @@ pub enum Expr {
     Let(Rc<Pattern>, Rc<Expr>, Option<Rc<Kind>>),
     Def(Rc<str>, Rc<Expr>, KindLike),
     Lambda(Rc<Pattern>, Rc<Expr>),
-    ImplicitArg
+    ImplicitArg,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub enum Kind {

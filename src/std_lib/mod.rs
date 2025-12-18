@@ -1347,7 +1347,58 @@ impl<'a> StdLibDefiner<'a> {
                     }
                 }
             ),
-        )
+        );
+
+        // ((a, b) -> c) -> a -> b -> c
+        let type_scheme = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+            let c = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("c"));
+            TypeScheme::forall(
+                [a, b, c],
+                Type::arrow(Type::arrow(Type::comma(Type::Var(a), Type::Var(b)), Type::Var(c)),
+                Type::arrow(Type::Var(a), Type::arrow(Type::Var(b), Type::Var(c)))),
+            )
+        };
+        self.def_func(
+            "curry",
+            type_scheme,
+            curry3!([], runner,
+                (Object::Func(f), arg1, arg2) => {
+                    let comma_arg = Rc::new(Object::Comma(Rc::new(arg1.clone()), Rc::new(arg2.clone())));
+                    let result = runner.call(&f, comma_arg)?;
+                    Ok(result)
+                }
+            ),
+        );
+
+        // (a -> b -> c) -> (a, b) -> c
+        let type_scheme = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+            let c = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("c"));
+            TypeScheme::forall(
+                [a, b, c],
+                Type::arrow(
+                    Type::arrow(Type::Var(a), Type::arrow(Type::Var(b), Type::Var(c))),
+                    Type::arrow(Type::comma(Type::Var(a), Type::Var(b)), Type::Var(c)),
+                ),
+            )
+        };
+        self.def_func(
+            "uncurry",
+            type_scheme,
+            curry!([], runner,
+                (Object::Func(f), Object::Comma(arg1, arg2)) => {
+                    let result1 = runner.call(&f, arg1.clone())?;
+                    let Object::Func(f2) = &*result1 else {
+                        panic!("expected function from uncurry");
+                    };
+                    let final_result = runner.call(f2, arg2.clone())?;
+                    Ok(final_result)
+                }
+            ),
+        );
     }
     pub fn def_comma_functions(&mut self) {
         let type_sheme = {

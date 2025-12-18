@@ -209,7 +209,7 @@ fn kind_like<'stream>() -> impl Parser<'stream, &'stream [Token], KindLike> + Cl
         Token::Ident(name) => name
     };
     let bound_vars = var
-        .separated_by(just(Token::Comma))
+        .repeated().at_least(1)
         .collect::<Vec<_>>()
         .delimited_by(just(Token::Forall), just(Token::Dot))
         .or_not()

@@ -59,10 +59,7 @@ fn main() {
 fn test() {
     use indoc::indoc;
     let src = indoc! {r#"
-    def print: forall a. Show a => (a) -> () = show .> putStrLn;
-    
-    curry {\(x, y) -> x + y} 3 4 |> print;
-    uncurry {\x y -> x + y} (3, 4) |> print;
+    zipWith {\x y -> x + y} [1, 2, 3] [4, 5, 6] |> print;
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");

@@ -502,6 +502,42 @@ impl<'a> StdLibDefiner<'a> {
                     .build()
             }
         );
+
+        let type_scheme = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            let constraint = Rc::new(Instance {
+                class: show_class.clone(),
+                assigned_types: vector![Type::Var(a)],
+            });
+            TypeScheme::forall_with_constraints(
+            [a],
+            Type::arrow(Type::Var(a), Type::Unit),
+            [constraint])
+        };
+        self.def_func_with_constraints(
+            "print",
+            type_scheme,
+            |runner, constraints| {
+                let show_a = constraints[0].methods["show"].clone();
+                let show_a = runner
+                    .read_var(&show_a, im_rc::HashMap::default())
+                    .unwrap();
+                let Object::Func(show_a) = &*show_a else {
+                    panic!("expected function for show method")
+                };
+                let show_a = show_a.clone();
+                Rc::new(native_func!(_runner,
+                    arg => {
+                        let shown = _runner.call(&show_a, Rc::new(arg.clone()))?;
+                        let Object::String(shown) = &*shown else {
+                            panic!("expected String from show method")
+                        };
+                        println!("{}", shown);
+                        Ok(Rc::new(Object::Unit))
+                    }
+                ))
+            }
+        );
     }
     fn def_add_class(&mut self) {
         let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
@@ -1158,6 +1194,48 @@ impl<'a> StdLibDefiner<'a> {
                             list2[i].clone(),
                         ));
                         zipped.push_back(pair);
+                    }
+                    Ok(Rc::new(Object::List(zipped)))
+                }
+            ),
+        );
+
+        // (a -> b -> c) -> [a] -> [b] -> [c]
+        let type_sheme = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+            let c = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("c"));
+            TypeScheme::forall(
+                [a, b, c],
+                Type::arrow(
+                    Type::arrow(
+                        Type::Var(a),
+                        Type::arrow(Type::Var(b), Type::Var(c)),
+                    ),
+                    Type::arrow(
+                        Type::list(Type::Var(a)),
+                        Type::arrow(
+                            Type::list(Type::Var(b)),
+                            Type::list(Type::Var(c)),
+                        ),
+                    ),
+                ),
+            )
+        };
+        self.def_func(
+            "zipWith",
+            type_sheme,
+            curry3!([], _runner,
+                (Object::Func(f), Object::List(list1), Object::List(list2)) => {
+                    let len = std::cmp::min(list1.len(), list2.len());
+                    let mut zipped = im_rc::Vector::new();
+                    for i in 0..len {
+                        let applied = _runner.call(&f, list1[i].clone())?;
+                        let Object::Func(f2) = &*applied else {
+                            panic!("zipWith function did not return a function");
+                        };
+                        let result = _runner.call(f2, list2[i].clone())?;
+                        zipped.push_back(result);
                     }
                     Ok(Rc::new(Object::List(zipped)))
                 }

@@ -26,28 +26,6 @@ macro_rules! native_func {
     };
 }
 
-macro_rules! curry {
-    ([$($captured:ident),*], $runner_ident: ident, $p:pat => $body:expr) => {
-        native_func!(_runner_ident,
-            arg0 => {
-                let arg0 = arg0.clone();
-                $(let $captured = $captured.clone();)*
-                Ok(Rc::new(native_func!($runner_ident,
-                    arg1 => {
-                        let arg0 = arg0.clone();
-                        let arg1 = arg1.clone();
-                        match (arg0, arg1) {
-                            $p => $body,
-                            #[allow(unreachable_patterns)]
-                            _ => panic!("invalid argument types for curried native function"),
-                        }
-                    }
-                )))
-            }
-        )
-    };
-}
-
 pub struct Runner {
     program_data: ProgramData,
     scope: Scope,

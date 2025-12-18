@@ -10,7 +10,7 @@ mod expr_test;
 #[cfg(test)]
 mod statement_test;
 
-pub fn program<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Expr>> {
+pub fn program<'a>() -> impl Parser<'a, &'a [Token], Rc<Expr>> {
     statement()
         .separated_by(just(Token::Semicolon).repeated().at_least(1))
         .allow_leading()
@@ -19,7 +19,7 @@ pub fn program<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Expr>> {
         .then_ignore(end())
         .map(|stmts| Rc::new(Expr::Brace(stmts)))
 }
-fn statement<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone {
+fn statement<'a>() -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
     recursive(|statement| {
         let expr = expr(statement);
         let ident = select! {
@@ -42,9 +42,9 @@ fn statement<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Cl
         ))
     })
 }
-fn expr<'stream>(
-    statement: impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone + 'stream,
-) -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone {
+fn expr<'a>(
+    statement: impl Parser<'a, &'a [Token], Rc<Expr>> + Clone + 'a,
+) -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
     recursive(move |expr: Recursive<dyn Parser<'_, &[Token], Rc<Expr>>>| {
         let literal = select! {
             Token::Int(n) => Expr::LitInt(n),
@@ -111,9 +111,9 @@ fn expr<'stream>(
         bin_ops(expr4)
     })
 }
-fn bin_ops<'stream>(
-    term: impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone + 'stream,
-) -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone {
+fn bin_ops<'a>(
+    term: impl Parser<'a, &'a [Token], Rc<Expr>> + Clone + 'a,
+) -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
     let expr3 = infixl(term, just(Token::CompositionLeft));
     let expr4 = infixl(expr3, just(Token::CompositionRight));
     let expr5 = infixl(
@@ -142,30 +142,30 @@ fn bin_ops<'stream>(
     let expr14 = infixr(expr13, just(Token::PipeLeft));
     infixl(expr14.clone(), just(Token::PipeRight))
 }
-fn infixl<'stream>(
-    expr: impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone + 'stream,
-    op: impl Parser<'stream, &'stream [Token], Token> + Clone + 'stream,
-) -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone {
+fn infixl<'a>(
+    expr: impl Parser<'a, &'a [Token], Rc<Expr>> + Clone + 'a,
+    op: impl Parser<'a, &'a [Token], Token> + Clone + 'a,
+) -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
     expr.clone()
         .foldl(op.then(expr).repeated(), |l, (op, r)| {
             Rc::new(Expr::BinOp(l, op, r))
         })
         .boxed()
 }
-fn infixr<'stream>(
-    expr: impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone + 'stream,
-    op: impl Parser<'stream, &'stream [Token], Token> + Clone + 'stream,
-) -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone {
+fn infixr<'a>(
+    expr: impl Parser<'a, &'a [Token], Rc<Expr>> + Clone + 'a,
+    op: impl Parser<'a, &'a [Token], Token> + Clone + 'a,
+) -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
     expr.clone()
         .then(op)
         .repeated()
         .foldr(expr, |(l, op), r| Rc::new(Expr::BinOp(l, op, r)))
         .boxed()
 }
-fn infix<'stream>(
-    expr: impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone + 'stream,
-    op: impl Parser<'stream, &'stream [Token], Token> + Clone + 'stream,
-) -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone {
+fn infix<'a>(
+    expr: impl Parser<'a, &'a [Token], Rc<Expr>> + Clone + 'a,
+    op: impl Parser<'a, &'a [Token], Token> + Clone + 'a,
+) -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
     expr.clone()
         .then(op.then(expr).or_not())
         .map(move |(l, succ)| match succ {
@@ -174,9 +174,9 @@ fn infix<'stream>(
         })
         .boxed()
 }
-fn kind_term<'stream>(
-    kind: impl Parser<'stream, &'stream [Token], Rc<Kind>> + Clone,
-) -> impl Parser<'stream, &'stream [Token], Rc<Kind>> + Clone {
+fn kind_term<'a>(
+    kind: impl Parser<'a, &'a [Token], Rc<Kind>> + Clone,
+) -> impl Parser<'a, &'a [Token], Rc<Kind>> + Clone {
     let ident = select! {
         Token::Ident(name) => Rc::new(Kind::Ident(name))
     };
@@ -194,7 +194,7 @@ fn kind_term<'stream>(
         .to(Rc::new(Kind::Unit));
     choice((ident, paren, list, unit))
 }
-fn kind<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Kind>> + Clone {
+fn kind<'a>() -> impl Parser<'a, &'a [Token], Rc<Kind>> + Clone {
     recursive(|kind| {
         let term = kind_term(kind);
         let app = term
@@ -207,7 +207,7 @@ fn kind<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Kind>> + Clone {
     })
     .boxed()
 }
-fn kind_like<'stream>() -> impl Parser<'stream, &'stream [Token], KindLike> + Clone {
+fn kind_like<'a>() -> impl Parser<'a, &'a [Token], KindLike> + Clone {
     let var = select! {
         Token::Ident(name) => name
     };
@@ -228,7 +228,7 @@ fn kind_like<'stream>() -> impl Parser<'stream, &'stream [Token], KindLike> + Cl
         })
 }
 
-fn constraint<'stream>() -> impl Parser<'stream, &'stream [Token], Constraint> + Clone {
+fn constraint<'a>() -> impl Parser<'a, &'a [Token], Constraint> + Clone {
     let type_class_name = select! {
         Token::Ident(name) => name
     };
@@ -236,7 +236,7 @@ fn constraint<'stream>() -> impl Parser<'stream, &'stream [Token], Constraint> +
         .then(kind_term(kind()).repeated().collect::<Vec<_>>())
         .map(|(type_class, args)| Constraint { type_class, args })
 }
-fn constraints<'stream>() -> impl Parser<'stream, &'stream [Token], Vec<Constraint>> + Clone {
+fn constraints<'a>() -> impl Parser<'a, &'a [Token], Vec<Constraint>> + Clone {
     constraint()
         .separated_by(just(Token::Comma))
         .collect::<Vec<_>>()
@@ -244,7 +244,7 @@ fn constraints<'stream>() -> impl Parser<'stream, &'stream [Token], Vec<Constrai
         .or(constraint().map(|c| vec![c]))
 }
 
-fn pattern<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Pattern>> + Clone {
+fn pattern<'a>() -> impl Parser<'a, &'a [Token], Rc<Pattern>> + Clone {
     recursive(|pattern| {
         let ident = select! {
             Token::Ident(name) => Rc::new(Pattern::Ident(name))

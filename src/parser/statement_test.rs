@@ -36,18 +36,25 @@ fn var_test() {
 #[test]
 fn let_test() {
     let input = [
+        Token::Let,
         Token::Ident("v".into()),
         Token::Equal,
         Token::Int("23".into()),
     ];
     assert_eq!(
         parser().parse(&input).into_result(),
-        Ok(Expr::Let("v".into(), Expr::LitInt("23".into()).into(), None).into())
+        Ok(Expr::Let(
+            Pattern::Ident("v".into()).into(),
+            Expr::LitInt("23".into()).into(),
+            None
+        )
+        .into())
     );
 }
 #[test]
 fn type_declaration_test() {
     let input = [
+        Token::Let,
         Token::Ident("x".into()),
         Token::Colon,
         Token::Ident("Int".into()),
@@ -57,13 +64,14 @@ fn type_declaration_test() {
     assert_eq!(
         parser().parse(&input).into_result(),
         Ok(Expr::Let(
-            "x".into(),
+            Pattern::Ident("x".into()).into(),
             Expr::LitInt("5".into()).into(),
             Some(Kind::Ident("Int".into()).into())
         )
         .into())
     );
     let input = [
+        Token::Let,
         Token::Ident("x".into()),
         Token::Colon,
         Token::Ident("Int".into()),
@@ -75,7 +83,7 @@ fn type_declaration_test() {
     assert_eq!(
         parser().parse(&input).into_result(),
         Ok(Expr::Let(
-            "x".into(),
+            Pattern::Ident("x".into()).into(),
             Expr::Ident("id".into()).into(),
             Some(
                 Kind::Arrow(
@@ -173,6 +181,7 @@ fn statements_test() {
     );
 
     let input = [
+        Token::Let,
         Token::Ident("x".into()),
         Token::Equal,
         Token::Float("2.3".into()),
@@ -184,7 +193,12 @@ fn statements_test() {
     assert_eq!(
         parser_statements().parse(&input).into_result(),
         Ok(vec![
-            Expr::Let("x".into(), Expr::LitFloat("2.3".into()).into(), None).into(),
+            Expr::Let(
+                Pattern::Ident("x".into()).into(),
+                Expr::LitFloat("2.3".into()).into(),
+                None
+            )
+            .into(),
             Expr::BinOp(
                 Expr::LitFloat("5.0".into()).into(),
                 Token::Plus,

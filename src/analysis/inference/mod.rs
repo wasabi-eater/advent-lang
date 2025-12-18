@@ -8,6 +8,7 @@ use itertools::Itertools;
 
 use super::program_data::*;
 use super::types::*;
+use crate::ast::Pattern;
 use crate::{
     analysis::errors,
     ast::{self, Expr},
@@ -195,7 +196,8 @@ pub struct InferencePool {
     tyvar_arena: id_arena::Arena<TyVarBody>,
     var_arena: id_arena::Arena<VarData>,
     scope: Scope,
-    let_type: FxHashMap<ExprRef, VarType>,
+    def_type: FxHashMap<ExprRef, VarType>,
+    pat_type: FxHashMap<PatternRef, VarType>,
     desugared: FxHashMap<ExprRef, Rc<Expr>>,
     extern_funcs: FxHashMap<Rc<str>, (TypeScheme, VarId)>,
     type_classes: FxHashMap<Rc<str>, TypeClassRef>,
@@ -210,13 +212,13 @@ pub struct Scope {
 #[derive(Clone)]
 enum VarType {
     Def(TypeScheme),
-    Annotated(Type),
     Unannotated(Typing),
 }
 
 struct ProgramDataBuilder {
     expr_ident_ref: FxHashMap<ExprRef, IdentRef>,
-    let_var_id: FxHashMap<ExprRef, VarId>,
+    def_var_ids: FxHashMap<ExprRef, VarId>,
+    pat_var_ids: FxHashMap<PatternRef, VarId>,
     new_scope: im_rc::HashMap<Rc<str>, (VarId, TypeScheme), fxhash::FxBuildHasher>,
     instance_defs: im_rc::HashMap<TypeClassRef, Vector<InstanceDefId>, fxhash::FxBuildHasher>,
     constraints: im_rc::HashMap<TypeClassRef, Vector<ConstraintId>, fxhash::FxBuildHasher>,
@@ -237,7 +239,8 @@ impl InferencePool {
             expr_typing: FxHashMap::default(),
             tyvar_arena,
             scope: Scope::default(),
-            let_type: FxHashMap::default(),
+            def_type: FxHashMap::default(),
+            pat_type: FxHashMap::default(),
             desugared: FxHashMap::default(),
             var_arena,
             type_classes: FxHashMap::default(),
@@ -394,7 +397,6 @@ impl InferencePool {
                 if let Some(var_ty) = self.scope.vars.get(name) {
                     match var_ty.clone() {
                         VarType::Def(type_scheme) => Ok(self.embody(&type_scheme)),
-                        VarType::Annotated(ty) => Ok(Typing::from(&ty, &FxHashMap::default())),
                         VarType::Unannotated(typing) => Ok(typing.clone()),
                     }
                 } else if let Some(class) = self.method_classes.get(name) {
@@ -411,25 +413,33 @@ impl InferencePool {
                     Err(errors::Error::UndefiedIdent(name.clone()))
                 }
             }
-            Expr::Let(name, assigned_expr, None) => {
+            Expr::Let(pat, assigned_expr, None) => {
                 let assigned_ty = self.infer(assigned_expr.clone())?;
-                let var_ty = VarType::Unannotated(assigned_ty);
-                self.scope.vars.insert(name.clone(), var_ty.clone());
-                self.let_type.insert(ExprRef(expr), var_ty);
+                let pat_ty = self.infer_pat(pat.clone())?;
+                unify(
+                    &assigned_ty,
+                    &pat_ty,
+                    &mut self.tmp_var_arena,
+                    assigned_expr.clone(),
+                )?;
                 Ok(Typing::Unit)
             }
             Expr::Let(name, assigned_expr, Some(kind)) => {
                 let ty = self.eval_kind(kind, &Self::std_defined_type_name())?;
                 let assigned_ty = self.infer(assigned_expr.clone())?;
+                let pat_ty = Typing::from(&ty, &FxHashMap::default());
                 unify(
                     &assigned_ty,
                     &Typing::from(&ty, &FxHashMap::default()),
                     &mut self.tmp_var_arena,
                     assigned_expr.clone(),
                 )?;
-                let var_ty = VarType::Annotated(ty);
-                self.scope.vars.insert(name.clone(), var_ty.clone());
-                self.let_type.insert(ExprRef(expr), var_ty);
+                unify(
+                    &pat_ty,
+                    &self.infer_pat(name.clone())?,
+                    &mut self.tmp_var_arena,
+                    assigned_expr.clone(),
+                )?;
                 Ok(Typing::Unit)
             }
             Expr::Def(name, assigned_expr, kind_like) => {
@@ -444,8 +454,36 @@ impl InferencePool {
                     &mut self.tmp_var_arena,
                     assigned_expr.clone(),
                 )?;
-                self.let_type.insert(ExprRef(expr), var_ty);
+                self.def_type.insert(ExprRef(expr), var_ty);
                 Ok(Typing::Unit)
+            }
+            Expr::Lambda(pat, body) => {
+                let old_scope = self.scope.clone();
+                let pat_ty = self.infer_pat(pat.clone())?;
+                let body_ty = self.infer(body.clone())?;
+                self.scope = old_scope;
+                Ok(Typing::Arrow(pat_ty.into(), body_ty.into()))
+            }
+        }
+    }
+    fn infer_pat(&mut self, pattern: Rc<Pattern>) -> errors::Result<Typing> {
+        match &*pattern {
+            Pattern::Ident(name) => {
+                let tmp_id = self.tmp_var_arena.alloc_unassigned();
+                let var_ty = VarType::Unannotated(Typing::TmpTyVar(tmp_id));
+                self.scope.vars.insert(name.clone(), var_ty.clone());
+                self.pat_type.insert(PatternRef(pattern.clone()), var_ty);
+                Ok(Typing::TmpTyVar(tmp_id))
+            }
+            Pattern::Unit => Ok(Typing::Unit),
+            Pattern::Comma(l, r) => {
+                let l_ty = self.infer_pat(l.clone())?;
+                let r_ty = self.infer_pat(r.clone())?;
+                Ok(Typing::Comma(Rc::new(l_ty), Rc::new(r_ty)))
+            }
+            Pattern::Wildcard => {
+                let tmp_id = self.tmp_var_arena.alloc_unassigned();
+                Ok(Typing::TmpTyVar(tmp_id))
             }
         }
     }
@@ -556,7 +594,8 @@ impl InferencePool {
             .collect();
         let mut program_data_builder = ProgramDataBuilder {
             expr_ident_ref: FxHashMap::default(),
-            let_var_id: FxHashMap::default(),
+            def_var_ids: FxHashMap::default(),
+            pat_var_ids: FxHashMap::default(),
             new_scope,
             instance_defs: self
                 .instances
@@ -571,7 +610,8 @@ impl InferencePool {
             var_arena: self.var_arena,
             expr_ty,
             expr_ident_ref: program_data_builder.expr_ident_ref,
-            let_var_ids: program_data_builder.let_var_id,
+            pat_var_ids: program_data_builder.pat_var_ids,
+            def_var_ids: program_data_builder.def_var_ids,
             desugaered: self.desugared,
             extern_funcs: self.extern_funcs,
             type_classes: self.type_classes,
@@ -589,7 +629,11 @@ impl InferencePool {
             return self.set_program_data(desugared.clone(), program_data_builder);
         }
         match &*expr {
-            Expr::LitInt(_) | Expr::LitFloat(_) | Expr::LitStr(_) | Expr::Unit | Expr::LitBool(_) => Ok(()),
+            Expr::LitInt(_)
+            | Expr::LitFloat(_)
+            | Expr::LitStr(_)
+            | Expr::Unit
+            | Expr::LitBool(_) => Ok(()),
             Expr::LitList(items) => {
                 for item in items {
                     self.set_program_data(item.clone(), program_data_builder)?;
@@ -609,7 +653,7 @@ impl InferencePool {
                 Ok(())
             }
             Expr::Def(name, assigned_expr, _) => {
-                let VarType::Def(type_scheme) = self.let_type[&ExprRef(expr.clone())].clone()
+                let VarType::Def(type_scheme) = self.def_type[&ExprRef(expr.clone())].clone()
                 else {
                     panic!("unexpected var type");
                 };
@@ -631,7 +675,7 @@ impl InferencePool {
                     .new_scope
                     .insert(name.clone(), (new_var_id, type_scheme.clone()));
                 program_data_builder
-                    .let_var_id
+                    .def_var_ids
                     .insert(ExprRef(expr.clone()), new_var_id);
                 let old_constraints = program_data_builder.constraints.clone();
                 for (constraint, constraint_id) in type_scheme.constraints.iter().zip(constraints) {
@@ -646,26 +690,16 @@ impl InferencePool {
 
                 Ok(())
             }
-            Expr::Let(name, assigned_expr, _) => {
-                let ty = match self.let_type[&ExprRef(expr.clone())].clone() {
-                    VarType::Def(_) => panic!("unexpeceted"),
-                    VarType::Annotated(ty) => ty,
-                    VarType::Unannotated(typing) => typing.try_to_type(&mut self.tmp_var_arena)?,
-                };
-                let type_scheme = TypeScheme::forall([], ty.clone());
-                let new_var_id = self.var_arena.alloc(VarData {
-                    name: name.clone(),
-                    ty: type_scheme.clone(),
-                    constraints: Vector::new(),
-                });
+            Expr::Let(pattern, assigned_expr, _) => {
                 self.set_program_data(assigned_expr.clone(), program_data_builder)?;
-
-                program_data_builder
-                    .let_var_id
-                    .insert(ExprRef(expr.clone()), new_var_id);
-                program_data_builder
-                    .new_scope
-                    .insert(name.clone(), (new_var_id, type_scheme));
+                self.set_program_data_pat(pattern.clone(), program_data_builder)?;
+                Ok(())
+            }
+            Expr::Lambda(pattern, body) => {
+                let out_scope = program_data_builder.new_scope.clone();
+                self.set_program_data_pat(pattern.clone(), program_data_builder)?;
+                self.set_program_data(body.clone(), program_data_builder)?;
+                program_data_builder.new_scope = out_scope;
                 Ok(())
             }
             Expr::Brace(statements) => {
@@ -740,6 +774,41 @@ impl InferencePool {
                 );
                 Ok(())
             }
+        }
+    }
+    fn set_program_data_pat(
+        &mut self,
+        pattern: Rc<Pattern>,
+        program_data_builder: &mut ProgramDataBuilder,
+    ) -> errors::Result<()> {
+        match &*pattern {
+            Pattern::Ident(name) => {
+                let typing = match self.pat_type[&PatternRef(pattern.clone())].clone() {
+                    VarType::Def(_) => panic!("unexpeceted"),
+                    VarType::Unannotated(typing) => typing,
+                };
+                let ty = typing.try_to_type(&mut self.tmp_var_arena)?;
+                let type_scheme = TypeScheme::forall([], ty.clone());
+                let new_var_id = self.var_arena.alloc(VarData {
+                    name: name.clone(),
+                    ty: type_scheme.clone(),
+                    constraints: Vector::new(),
+                });
+                program_data_builder
+                    .new_scope
+                    .insert(name.clone(), (new_var_id, type_scheme));
+                program_data_builder
+                    .pat_var_ids
+                    .insert(PatternRef(pattern.clone()), new_var_id);
+                Ok(())
+            }
+            Pattern::Unit => Ok(()),
+            Pattern::Comma(l, r) => {
+                self.set_program_data_pat(l.clone(), program_data_builder)?;
+                self.set_program_data_pat(r.clone(), program_data_builder)?;
+                Ok(())
+            }
+            Pattern::Wildcard => Ok(()),
         }
     }
     fn get_instance_ref(

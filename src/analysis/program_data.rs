@@ -18,7 +18,8 @@ pub struct ProgramData {
     pub var_arena: id_arena::Arena<VarData>,
     pub expr_ty: FxHashMap<ExprRef, Rc<Type>>,
     pub expr_ident_ref: FxHashMap<ExprRef, IdentRef>,
-    pub let_var_ids: FxHashMap<ExprRef, VarId>,
+    pub def_var_ids: FxHashMap<ExprRef, VarId>,
+    pub pat_var_ids: FxHashMap<PatternRef, VarId>,
     pub desugaered: FxHashMap<ExprRef, Rc<Expr>>,
     pub extern_funcs: FxHashMap<Rc<str>, (TypeScheme, VarId)>, // name -> (type_scheme, var_id)
     pub type_classes: FxHashMap<Rc<str>, TypeClassRef>,
@@ -48,10 +49,24 @@ impl Hash for ExprRef {
 }
 impl PartialEq for ExprRef {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0.as_ref(), other.0.as_ref())
+        Rc::ptr_eq(&self.0, &other.0)
     }
 }
 impl Eq for ExprRef {}
+
+#[derive(Clone, Debug)]
+pub struct PatternRef(pub Rc<crate::ast::Pattern>);
+impl Hash for PatternRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self.0.as_ref() as *const _ as usize).hash(state);
+    }
+}
+impl PartialEq for PatternRef {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for PatternRef {}
 
 pub struct InstanceDef {
     pub scheme: InstanceScheme,

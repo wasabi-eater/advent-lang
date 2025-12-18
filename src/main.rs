@@ -59,7 +59,11 @@ fn main() {
 fn test() {
     use indoc::indoc;
     let src = indoc! {r#"
-    putStrLn <| if (1 == 1) '"Hello" '"World"
+    def print: forall a. Show a => (a) -> () = show .> putStrLn;
+    
+    let (x, y) = (4, 5);
+    print (x + y);
+    let _ = 34;
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");

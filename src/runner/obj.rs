@@ -1,5 +1,8 @@
 use super::core::Runner;
-use crate::{ast::Expr, runner::errors};
+use crate::{
+    ast::{Expr, Pattern},
+    runner::{core::Scope, errors},
+};
 use im_rc::Vector;
 use std::{fmt::Debug, rc::Rc};
 
@@ -17,7 +20,7 @@ pub enum Object {
 
 #[derive(Clone)]
 pub enum Func {
-    UserDefFunc(Rc<str>, Rc<Expr>),
+    UserDefFunc(Rc<Pattern>, Rc<Expr>, Scope),
     NativeFunc(NativeFuncInner),
 }
 pub type NativeFuncInner = Rc<dyn Fn(&mut Runner, Rc<Object>) -> errors::Result<Rc<Object>>>;

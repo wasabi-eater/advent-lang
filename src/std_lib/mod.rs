@@ -1330,11 +1330,9 @@ impl<'a> StdLibDefiner<'a> {
                     Type::Bool,
                     Type::arrow(
                         Type::arrow(Type::Unit, Type::Var(a)),
-                        Type::arrow(
-                            Type::arrow(Type::Unit, Type::Var(a)),
-                             Type::Var(a))
-                    )
-                )
+                        Type::arrow(Type::arrow(Type::Unit, Type::Var(a)), Type::Var(a)),
+                    ),
+                ),
             )
         };
         self.def_func(

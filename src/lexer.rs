@@ -85,12 +85,16 @@ pub enum Token {
     Div,
     #[token("%")]
     Mod,
+    #[token("\\")]
+    Backslash,
     #[regex(r"([[:alpha:]]|_)([[:alnum:]]|_)*", |lex| Rc::from(lex.slice()))]
     Ident(Rc<str>),
     Forall,
+    Let,
     Def,
     True,
-    False
+    False,
+    Underscore,
 }
 
 pub fn tokenize(src: &str) -> Option<Vec<Token>> {
@@ -98,8 +102,10 @@ pub fn tokenize(src: &str) -> Option<Vec<Token>> {
         .map_ok(|token| match token {
             Token::Ident(word) if &*word == "forall" => Token::Forall,
             Token::Ident(word) if &*word == "def" => Token::Def,
+            Token::Ident(word) if &*word == "let" => Token::Let,
             Token::Ident(word) if &*word == "true" => Token::True,
             Token::Ident(word) if &*word == "false" => Token::False,
+            Token::Ident(word) if &*word == "_" => Token::Underscore,
             other => other,
         })
         .try_collect()

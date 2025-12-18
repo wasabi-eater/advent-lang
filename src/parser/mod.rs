@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Constraint, Expr, Kind, KindLike},
+    ast::{Constraint, Expr, Kind, KindLike, Pattern},
     lexer::Token,
 };
 use chumsky::prelude::*;
@@ -32,7 +32,8 @@ fn statement<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Cl
                 .then_ignore(just(Token::Equal))
                 .then(expr.clone())
                 .map(move |((name, kind_like), e)| Rc::new(Expr::Def(name, e, kind_like))),
-            ident
+            just(Token::Let)
+                .ignore_then(pattern())
                 .then(just(Token::Colon).ignore_then(kind()).or_not())
                 .then_ignore(just(Token::Equal))
                 .then(expr.clone())
@@ -69,10 +70,23 @@ fn expr<'stream>(
             .allow_leading()
             .allow_trailing()
             .collect::<Vec<Rc<Expr>>>();
-        let brace = statements
+        let lambda_param = just(Token::Backslash)
+            .ignore_then(pattern().repeated().collect::<Vec<_>>())
+            .then_ignore(just(Token::SmallArrow));
+        let brace = lambda_param.or_not()
+            .then(statements)
             .delimited_by(just(Token::BraceOpen), just(Token::BraceClose))
-            .map(move |stmts| Rc::new(Expr::Brace(stmts)));
+            .map(move |(param, stmts)| match param {
+                Some(params) => {
+                    let body = Rc::new(Expr::Brace(stmts));
+                    params.into_iter().rev().fold(body, |acc, pat| {
+                        Rc::new(Expr::Lambda(pat, acc))
+                    })
+                }
+                None => Rc::new(Expr::Brace(stmts)),
+            });
         let list = expr
+            .clone()
             .separated_by(just(Token::Comma))
             .collect::<Vec<_>>()
             .delimited_by(just(Token::BracketOpen), just(Token::BracketClose))
@@ -123,7 +137,7 @@ fn bin_ops<'stream>(
     let expr12 = infixl(expr11, just(Token::DoubleAmp));
     let expr13 = infixl(expr12, just(Token::DoublePipe));
     let expr14 = infixr(expr13, just(Token::PipeLeft));
-    infixl(expr14, just(Token::PipeRight))
+    infixl(expr14.clone(), just(Token::PipeRight))
 }
 fn infixl<'stream>(
     expr: impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone + 'stream,
@@ -188,6 +202,7 @@ fn kind<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Kind>> + Clone {
             .repeated()
             .foldr(app, |l, r| Rc::new(Kind::Arrow(l, r)))
     })
+    .boxed()
 }
 fn kind_like<'stream>() -> impl Parser<'stream, &'stream [Token], KindLike> + Clone {
     let var = select! {
@@ -223,4 +238,25 @@ fn constraints<'stream>() -> impl Parser<'stream, &'stream [Token], Vec<Constrai
         .collect::<Vec<_>>()
         .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
         .or(constraint().map(|c| vec![c]))
+}
+
+fn pattern<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Pattern>> + Clone {
+    recursive(|pattern| {
+        let ident = select! {
+            Token::Ident(name) => Rc::new(Pattern::Ident(name))
+        };
+        let unit = just(Token::ParenOpen)
+            .then(just(Token::ParenClose))
+            .to(Rc::new(Pattern::Unit));
+        let paren = pattern
+            .clone()
+            .then_ignore(just(Token::Comma))
+            .repeated()
+            .foldr(pattern.clone(), |l, r| Rc::new(Pattern::Comma(l, r)))
+            .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
+            .or(unit);
+        let wildcard = just(Token::Underscore).to(Rc::new(Pattern::Wildcard));
+        choice((ident, paren, wildcard))
+    })
+    .boxed()
 }

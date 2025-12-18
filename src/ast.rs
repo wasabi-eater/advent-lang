@@ -17,8 +17,9 @@ pub enum Expr {
     Ident(Rc<str>),
     Brace(Vec<Rc<Expr>>),
     Unit,
-    Let(Rc<str>, Rc<Expr>, Option<Rc<Kind>>),
+    Let(Rc<Pattern>, Rc<Expr>, Option<Rc<Kind>>),
     Def(Rc<str>, Rc<Expr>, KindLike),
+    Lambda(Rc<Pattern>, Rc<Expr>),
 }
 #[derive(Clone, PartialEq, Eq)]
 pub enum Kind {
@@ -39,6 +40,13 @@ pub struct KindLike {
     pub bound_vars: Vec<Rc<str>>,
     pub constraints: Vec<Constraint>,
     pub kind: Rc<Kind>,
+}
+#[derive(Clone, PartialEq, Eq)]
+pub enum Pattern {
+    Ident(Rc<str>),
+    Comma(Rc<Pattern>, Rc<Pattern>),
+    Wildcard,
+    Unit,
 }
 
 impl Debug for Expr {
@@ -75,9 +83,10 @@ impl Debug for Expr {
                 Ok(())
             }
             Expr::Unit => f.write_str("()"),
-            Expr::Let(name, expr, Some(kind)) => write!(f, "{name}: {kind:?} = {expr:?}"),
-            Expr::Let(name, expr, None) => write!(f, "{name} = {expr:?}"),
-            Expr::Def(name, expr, kind_like) => write!(f, "{name}: {kind_like:?} = {expr:?}"),
+            Expr::Let(pat, expr, Some(kind)) => write!(f, "let {pat:?}: {kind:?} = {expr:?}"),
+            Expr::Let(pat, expr, None) => write!(f, "let {pat:?} = {expr:?}"),
+            Expr::Def(name, expr, kind_like) => write!(f, "def {name}: {kind_like:?} = {expr:?}"),
+            Expr::Lambda(pat, body) => write!(f, "(\\{pat:?} -> {body:?})"),
         }
     }
 }
@@ -132,5 +141,16 @@ impl Debug for Constraint {
             write!(f, " {arg:?}")?;
         }
         Ok(())
+    }
+}
+
+impl Debug for Pattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Pattern::Ident(name) => f.write_str(name),
+            Pattern::Comma(l, r) => write!(f, "({l:?}, {r:?})"),
+            Pattern::Unit => f.write_str("()"),
+            Pattern::Wildcard => f.write_str("_"),
+        }
     }
 }

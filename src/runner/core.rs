@@ -6,9 +6,10 @@ use itertools::Itertools;
 
 use crate::{
     analysis::program_data::{
-        ConstraintAssign, ExprRef, IdentRef, InstanceDefId, InstanceRef, ProgramData, VarId,
+        ConstraintAssign, ExprRef, IdentRef, InstanceDefId, InstanceRef, PatternRef, ProgramData,
+        VarId,
     },
-    ast::Expr,
+    ast::{Expr, Pattern},
     lexer::Token,
     runner::obj::Func,
     std_lib,
@@ -143,15 +144,20 @@ impl Runner {
                     None => Ok(Rc::new(Object::Unit)),
                 }
             }
-            Expr::Let(_, assigned_expr, _) => {
+            Expr::Let(pattern, assigned_expr, _) => {
                 let obj = self.eval(assigned_expr.clone())?;
-                let var_id = self.program_data.let_var_ids[&ExprRef(expr.clone())];
-                self.scope.vars.insert(var_id, Variable::Var(obj));
+                self.assign_pattern(pattern.clone(), obj)?;
                 Ok(Rc::new(Object::Unit))
+            }
+            Expr::Lambda(pat, body) => {
+                let pat = pat.clone();
+                let body = body.clone();
+                let scope = self.scope.clone();
+                Ok(Rc::new(Object::Func(Func::UserDefFunc(pat, body, scope))))
             }
             Expr::Def(_, assigned_expr, _) => {
                 let scope = self.scope.clone();
-                let var_id = self.program_data.let_var_ids[&ExprRef(expr.clone())];
+                let var_id = self.program_data.def_var_ids[&ExprRef(expr.clone())];
                 let assigned_expr = assigned_expr.clone();
                 self.scope.vars.insert(
                     var_id,
@@ -179,10 +185,42 @@ impl Runner {
             Expr::Member(_, _) => todo!(),
         }
     }
+    fn assign_pattern(&mut self, pat: Rc<Pattern>, obj: Rc<Object>) -> errors::Result<()> {
+        match &*pat {
+            Pattern::Ident(_) => {
+                let var_id = self.program_data.pat_var_ids[&PatternRef(pat.clone())];
+                self.scope.vars.insert(var_id, Variable::Var(obj));
+                Ok(())
+            }
+            Pattern::Comma(l, r) => {
+                let Object::Comma(left, right) = &*obj else {
+                    panic!("expected comma object for comma pattern")
+                };
+                self.assign_pattern(l.clone(), left.clone())?;
+                self.assign_pattern(r.clone(), right.clone())?;
+                Ok(())
+            }
+            Pattern::Unit => {
+                if let Object::Unit = &*obj {
+                    Ok(())
+                } else {
+                    panic!("expected unit for unit pattern")
+                }
+            }
+            Pattern::Wildcard => Ok(()),
+        }
+    }
     pub fn call(&mut self, func: &Func, param: Rc<Object>) -> errors::Result<Rc<Object>> {
         match &func {
             Func::NativeFunc(inner) => inner(self, param),
-            Func::UserDefFunc(_, _) => todo!(),
+            Func::UserDefFunc(pat, body, def_scope) => {
+                let old_scope = self.scope.clone();
+                self.scope = def_scope.clone();
+                self.assign_pattern(pat.clone(), param)?;
+                let result = self.eval(body.clone());
+                self.scope = old_scope;
+                result
+            }
         }
     }
     pub fn replace_instance(&self, instance_ref: &mut InstanceRef) {

@@ -161,6 +161,7 @@ fn term_test() {
     );
     let input = [
         Token::BraceOpen,
+        Token::Let,
         Token::Ident("x".into()),
         Token::Equal,
         Token::Int("32".into()),
@@ -171,9 +172,43 @@ fn term_test() {
     assert_eq!(
         parser().parse(&input).into_result(),
         Ok(Expr::Brace(vec![
-            Expr::Let("x".into(), Expr::LitInt("32".into()).into(), None).into(),
+            Expr::Let(
+                Pattern::Ident("x".into()).into(),
+                Expr::LitInt("32".into()).into(),
+                None
+            )
+            .into(),
             Expr::Ident("x".into()).into()
         ])
+        .into())
+    );
+}
+
+#[test]
+fn lambda_test() {
+    let input = [
+        Token::BraceOpen,
+        Token::Backslash,
+        Token::Ident("x".into()),
+        Token::SmallArrow,
+        Token::Ident("x".into()),
+        Token::Plus,
+        Token::Int("1".into()),
+        Token::BraceClose,
+    ];
+    assert_eq!(
+        parser().parse(&input).into_result(),
+        Ok(Expr::Lambda(
+            Pattern::Ident("x".into()).into(),
+            Expr::Brace(vec![
+                Expr::BinOp(
+                    Expr::Ident("x".into()).into(),
+                    Token::Plus,
+                    Expr::LitInt("1".into()).into()
+                )
+                .into()
+            ]).into()
+        )
         .into())
     );
 }

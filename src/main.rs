@@ -70,7 +70,15 @@ fn build_and_run(src: &str) {
 fn test() {
     use indoc::indoc;
     let src = indoc! {r#"
-    zipWith {_ + _} [0, 1, 2] [3, 4, 5]
+    def printTwice: forall a. Show a => a -> () = {\x ->
+        print x;
+        print x;
+    }; -- hoge hoge
+
+    printTwice 34;
+    printTwice 3.4;
+    printTwice "Hoge";
+    printTwice [[0, 1, 2], [3, 4, 5]];
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");

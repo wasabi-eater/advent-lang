@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"\s+")]
+#[logos(skip r"--[^\n]*")]
 pub enum Token {
     #[regex("[0-9]+", |lex| Rc::from(lex.slice()))]
     Int(Rc<str>),

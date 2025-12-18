@@ -20,6 +20,7 @@ pub enum Expr {
     Let(Rc<Pattern>, Rc<Expr>, Option<Rc<Kind>>),
     Def(Rc<str>, Rc<Expr>, KindLike),
     Lambda(Rc<Pattern>, Rc<Expr>),
+    ImplicitArg
 }
 #[derive(Clone, PartialEq, Eq)]
 pub enum Kind {
@@ -87,6 +88,7 @@ impl Debug for Expr {
             Expr::Let(pat, expr, None) => write!(f, "let {pat:?} = {expr:?}"),
             Expr::Def(name, expr, kind_like) => write!(f, "def {name}: {kind_like:?} = {expr:?}"),
             Expr::Lambda(pat, body) => write!(f, "(\\{pat:?} -> {body:?})"),
+            Expr::ImplicitArg => write!(f, "_"),
         }
     }
 }

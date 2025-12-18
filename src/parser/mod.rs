@@ -57,6 +57,7 @@ fn expr<'stream>(
         let ident = select! {
             Token::Ident(s) => s
         };
+        let implicit_arg = just(Token::Underscore).to(Rc::new(Expr::ImplicitArg));
         let var = ident.map(move |name| Rc::new(Expr::Ident(name)));
         let unit = just(Token::ParenOpen)
             .then(just(Token::ParenClose))
@@ -91,7 +92,7 @@ fn expr<'stream>(
             .collect::<Vec<_>>()
             .delimited_by(just(Token::BracketOpen), just(Token::BracketClose))
             .map(move |list| Rc::new(Expr::LitList(list)));
-        let expr0 = choice((literal, var, paren, brace, list));
+        let expr0 = choice((literal, var, paren, brace, list, implicit_arg));
         let expr1 = expr0.foldl(
             just(Token::Dot).ignore_then(ident).repeated(),
             move |e, name| Rc::new(Expr::Member(e, name)),

@@ -36,6 +36,7 @@ pub enum Error {
     UnknownTypeClassName {
         type_class_name: Rc<str>,
     },
+    EscapingImplicitArg,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -88,6 +89,9 @@ impl Debug for Error {
             }
             Self::TooManyInstanceParam { type_class } => {
                 write!(f, "too many instance param count for {}", type_class.0.name)
+            }
+            Self::EscapingImplicitArg => {
+                write!(f, "implicit argument escapes its scope")
             }
         }
     }

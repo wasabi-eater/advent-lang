@@ -62,6 +62,7 @@ pub enum InstanceDefiner {
 pub struct Scope {
     vars: im_rc::HashMap<VarId, Variable, fxhash::FxBuildHasher>,
     instance_replace: ConstraintAssign,
+    implicit_args: im_rc::Vector<Rc<Object>>,
 }
 
 impl Runner {
@@ -75,6 +76,7 @@ impl Runner {
                     .map(|(var_id, (_, _, obj))| (var_id, obj))
                     .collect(),
                 instance_replace: ConstraintAssign::default(),
+                implicit_args: im_rc::Vector::new(),
             },
             instance_body_cache: FxHashMap::default(),
             instance_body_definers: std_lib.instance_body_definers,
@@ -135,14 +137,18 @@ impl Runner {
                 let data = self.read_var(&data, given_instance)?;
                 Ok(data)
             }
-            Expr::Brace(statements) => {
+            Expr::Brace(statements) if self.program_data.partial_app_arg_types[&ExprRef(expr.clone())].is_empty() => {
                 let old_scope = self.scope.clone();
-                let result = statements.iter().map(|expr| self.eval(expr.clone())).last();
-                self.scope = old_scope;
-                match result {
-                    Some(result) => result,
-                    None => Ok(Rc::new(Object::Unit)),
+                let mut result = Rc::new(Object::Unit);
+                for expr in statements {
+                    result = self.eval(expr.clone())?;
                 }
+                self.scope = old_scope;
+                Ok(result)
+            }
+            Expr::Brace(_) => {
+                let implicit_arg_count = self.program_data.partial_app_arg_types[&ExprRef(expr.clone())].len();
+                Ok(Rc::new(Object::Func(Func::PartialApp(expr.clone(), self.scope.clone(), implicit_arg_count, im_rc::Vector::new()))))
             }
             Expr::Let(pattern, assigned_expr, _) => {
                 let obj = self.eval(assigned_expr.clone())?;
@@ -179,6 +185,10 @@ impl Runner {
                         runner.eval(expr.clone())
                     }
                 )))
+            }
+            Expr::ImplicitArg => {
+                let index = self.program_data.implicit_arg_index[&ExprRef(expr.clone())];
+                Ok(self.scope.implicit_args[index].clone())
             }
             Expr::BinOp(_, _, _) => unreachable!(),
             Expr::UnOp(_, _) => unreachable!(),
@@ -220,6 +230,31 @@ impl Runner {
                 let result = self.eval(body.clone());
                 self.scope = old_scope;
                 result
+            }
+            Func::PartialApp(expr, scope, arg_count, args) => {
+                let mut new_args = args.clone();
+                new_args.push_back(param);
+                if new_args.len() == *arg_count {
+                    let old_scope = self.scope.clone();
+                    self.scope = scope.clone();
+                    self.scope.implicit_args = new_args;
+                    let Expr::Brace(stmts) = &**expr else {
+                        panic!("expected brace expression for partial app")
+                    };
+                    let mut result = Rc::new(Object::Unit);
+                    for stmt in stmts {
+                        result = self.eval(stmt.clone())?;
+                    }
+                    self.scope = old_scope;
+                    Ok(result)
+                } else {
+                    Ok(Rc::new(Object::Func(Func::PartialApp(
+                        expr.clone(),
+                        scope.clone(),
+                        *arg_count,
+                        new_args,
+                    ))))
+                }
             }
         }
     }

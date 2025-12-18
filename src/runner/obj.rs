@@ -21,6 +21,7 @@ pub enum Object {
 #[derive(Clone)]
 pub enum Func {
     UserDefFunc(Rc<Pattern>, Rc<Expr>, Scope),
+    PartialApp(Rc<Expr>, Scope, usize, Vector<Rc<Object>>),
     NativeFunc(NativeFuncInner),
 }
 pub type NativeFuncInner = Rc<dyn Fn(&mut Runner, Rc<Object>) -> errors::Result<Rc<Object>>>;

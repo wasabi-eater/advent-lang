@@ -26,6 +26,8 @@ pub struct ProgramData {
     pub instances: FxHashMap<TypeClassRef, Vector<InstanceDefId>>,
     pub instance_arena: InstanceArena,
     pub method_classes: FxHashMap<Rc<str>, TypeClassRef>,
+    pub implicit_arg_index: FxHashMap<ExprRef, usize>,
+    pub partial_app_arg_types: FxHashMap<ExprRef, Vector<Rc<Type>>>,
 }
 
 pub type ConstraintAssign = im_rc::HashMap<ConstraintId, InstanceRef, fxhash::FxBuildHasher>;

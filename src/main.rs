@@ -59,7 +59,7 @@ fn main() {
 fn test() {
     use indoc::indoc;
     let src = indoc! {r#"
-    zipWith {\x y -> x + y} [1, 2, 3] [4, 5, 6] |> print;
+    zipWith {_ + _} [0, 1, 2] [3, 4, 5]
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");

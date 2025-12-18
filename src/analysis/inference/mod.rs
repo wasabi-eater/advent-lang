@@ -204,10 +204,14 @@ pub struct InferencePool {
     method_classes: FxHashMap<Rc<str>, TypeClassRef>,
     instances: FxHashMap<TypeClassRef, Vector<InstanceDefId>>,
     instance_arena: InstanceArena,
+    implicit_arg_index: FxHashMap<ExprRef, usize>,
+    partial_app_arg_types: FxHashMap<ExprRef, Vector<Typing>>,
 }
 #[derive(Default, Clone)]
 pub struct Scope {
     vars: im_rc::HashMap<Rc<str>, VarType, fxhash::FxBuildHasher>,
+    implicit_arg_count: Option<usize>,
+    implicit_arg_types: Vector<Typing>,
 }
 #[derive(Clone)]
 enum VarType {
@@ -248,6 +252,8 @@ impl InferencePool {
             method_classes: FxHashMap::default(),
             instances: FxHashMap::default(),
             instance_arena: InstanceArena::default(),
+            implicit_arg_index: FxHashMap::default(),
+            partial_app_arg_types: FxHashMap::default(),
         }
     }
     pub fn extern_type_class(&mut self, type_class: TypeClassRef) {
@@ -322,6 +328,7 @@ impl InferencePool {
             return Ok(expr_typing.typing.clone());
         }
         let typing = self.infer_inner(expr.clone())?;
+        println!("{expr:?} {typing:?}");
         self.expr_typing.insert(
             ExprRef(expr.clone()),
             ExprTyping {
@@ -353,14 +360,32 @@ impl InferencePool {
             }
             Expr::Brace(statements) if statements.is_empty() => Ok(Typing::Unit),
             Expr::Brace(statements) => {
-                let mut scope = self.scope.clone();
-                std::mem::swap(&mut scope, &mut self.scope);
+                let scope = self.scope.clone();
+                self.scope.implicit_arg_count = Some(0);
+                self.scope.implicit_arg_types = Vector::new();
+                for stmt in statements {                
+                    self.set_implicit_index(stmt.clone())?;
+                }
+                let count = self.scope.implicit_arg_count.unwrap();
+                let param_tys: im_rc::Vector<Typing> = (0..count)
+                    .map(|_| self.tmp_var_arena.alloc_unassigned())
+                    .map(Typing::TmpTyVar)
+                    .collect();
+                self.scope.implicit_arg_types = param_tys.clone();
                 for statement in &statements[..statements.len() - 1] {
                     self.infer(statement.clone())?;
                 }
                 let last_ty = self.infer(statements[statements.len() - 1].clone())?;
-                std::mem::swap(&mut scope, &mut self.scope);
-                Ok(last_ty)
+                let ty = param_tys
+                    .iter()
+                    .rev()
+                    .fold(last_ty, |acc, implicit_arg_ty| {
+                        Typing::Arrow(implicit_arg_ty.clone().into(), acc.into())
+                    });
+                self.partial_app_arg_types.insert(ExprRef(expr.clone()), self.scope.implicit_arg_types.clone());
+                println!("len = {}", self.scope.implicit_arg_types.len());
+                self.scope = scope;
+                Ok(ty)
             }
             Expr::AppFun(f, param) => {
                 let f_ty = self.infer(f.clone())?;
@@ -464,6 +489,9 @@ impl InferencePool {
                 self.scope = old_scope;
                 Ok(Typing::Arrow(pat_ty.into(), body_ty.into()))
             }
+            Expr::ImplicitArg => {
+                Ok(self.scope.implicit_arg_types[self.implicit_arg_index[&ExprRef(expr.clone())]].clone())
+            }
         }
     }
     fn infer_pat(&mut self, pattern: Rc<Pattern>) -> errors::Result<Typing> {
@@ -485,6 +513,47 @@ impl InferencePool {
                 let tmp_id = self.tmp_var_arena.alloc_unassigned();
                 Ok(Typing::TmpTyVar(tmp_id))
             }
+        }
+    }
+    pub fn set_implicit_index(&mut self, expr: Rc<Expr>) -> errors::Result<()> {
+        match &*expr {
+            Expr::ImplicitArg => {
+                let Some(count) = self.scope.implicit_arg_count.as_mut() else {
+                    return Err(errors::Error::EscapingImplicitArg);
+                };
+                *count += 1;
+                self.implicit_arg_index
+                    .insert(ExprRef(expr.clone()), *count - 1);
+                Ok(())
+            }
+            Expr::Brace(_) => Ok(()),
+            Expr::AppFun(f, p) => {
+                self.set_implicit_index(f.clone())?;
+                self.set_implicit_index(p.clone())
+            },
+            Expr::UnOp(_, operand) => {
+                self.set_implicit_index(operand.clone())
+            },
+            Expr::BinOp(l, _, r) => {
+                self.set_implicit_index(l.clone())?;
+                self.set_implicit_index(r.clone())
+            },
+            Expr::Ident(_) => Ok(()),
+            Expr::LitBool(_) | Expr::LitStr(_) | Expr::LitInt(_) | Expr::LitFloat(_) | Expr::Unit => Ok(()),
+            Expr::Let(_, assigned_expr, _) => {
+                self.set_implicit_index(assigned_expr.clone())
+            }
+            Expr::Def(_, assigned_expr, _) => {
+                self.set_implicit_index(assigned_expr.clone())
+            }
+            Expr::LitList(items) => {
+                for item in items {
+                    self.set_implicit_index(item.clone())?;
+                }
+                Ok(())
+            }
+            Expr::Member(_, _) => todo!(),
+            Expr::Lambda(_, _) => Ok(())
         }
     }
     fn std_defined_type_name() -> FxHashMap<Rc<str>, Type> {
@@ -602,9 +671,17 @@ impl InferencePool {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
-            constraints: im_rc::HashMap::default(),
+            constraints: im_rc::HashMap::default()
         };
         self.set_program_data(expr, &mut program_data_builder)?;
+        let partial_app_arg_types = self.partial_app_arg_types.into_iter().map(|(expr_ref, arg_types)| {
+            let types = arg_types
+            .into_iter()
+            .map(|ty| ty.try_to_type(&mut self.tmp_var_arena))
+            .map_ok(Rc::new)
+            .try_collect()?;
+            Ok((expr_ref, types))
+        }).try_collect()?;
         Ok(ProgramData {
             tyvar_arena: self.tyvar_arena,
             var_arena: self.var_arena,
@@ -618,6 +695,8 @@ impl InferencePool {
             method_classes: self.method_classes,
             instances: self.instances,
             instance_arena: self.instance_arena,
+            implicit_arg_index: self.implicit_arg_index,
+            partial_app_arg_types,
         })
     }
     fn set_program_data(
@@ -634,6 +713,7 @@ impl InferencePool {
             | Expr::LitStr(_)
             | Expr::Unit
             | Expr::LitBool(_) => Ok(()),
+            Expr::ImplicitArg => Ok(()),
             Expr::LitList(items) => {
                 for item in items {
                     self.set_program_data(item.clone(), program_data_builder)?;

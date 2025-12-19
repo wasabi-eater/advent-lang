@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use logos::Logos;
+use logos::{Lexer, Logos};
 use std::rc::Rc;
 
 #[derive(Logos, Debug, PartialEq, Clone)]
@@ -88,7 +88,7 @@ pub enum Token {
     Mod,
     #[token("\\")]
     Backslash,
-    #[regex(r"([[:alpha:]]|_)([[:alnum:]]|_)*", |lex| Rc::from(lex.slice()))]
+    #[regex(r"([[:alpha:]]|_)([[:alnum:]]|_)*|`[^`\\\x00-\x1F\s]*`", ident)]
     Ident(Rc<str>),
     Forall,
     Let,
@@ -111,6 +111,16 @@ pub fn tokenize(src: &str) -> Option<Vec<Token>> {
         })
         .try_collect()
         .ok()
+}
+
+
+fn ident<'s>(lex: &Lexer<'s, Token>) -> Rc<str> {
+    let s = lex.slice();
+    if s.starts_with('`') && s.ends_with('`') {
+        Rc::from(&s[1..s.len() - 1])
+    } else {
+        Rc::from(s)
+    }
 }
 
 impl Token {

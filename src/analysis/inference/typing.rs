@@ -10,7 +10,7 @@ pub enum Typing {
     Var(TyVar),
     List(Rc<Typing>),
     Arrow(Rc<Typing>, Rc<Typing>),
-    Comma(Rc<Typing>, Rc<Typing>),
+    Pair(Rc<Typing>, Rc<Typing>),
     TmpTyVar(TmpTyVarId),
 }
 impl Typing {
@@ -31,10 +31,10 @@ impl Typing {
                 let r = Typing::from(r, subst);
                 Typing::Arrow(Rc::new(l), Rc::new(r))
             }
-            Type::Comma(l, r) => {
+            Type::Pair(l, r) => {
                 let l = Typing::from(l, subst);
                 let r = Typing::from(r, subst);
-                Typing::Comma(Rc::new(l), Rc::new(r))
+                Typing::Pair(Rc::new(l), Rc::new(r))
             }
         }
     }
@@ -51,7 +51,7 @@ impl Typing {
                 Rc::new(l.try_to_type(arena)?),
                 Rc::new(r.try_to_type(arena)?),
             )),
-            Typing::Comma(l, r) => Ok(Type::Comma(
+            Typing::Pair(l, r) => Ok(Type::Pair(
                 Rc::new(l.try_to_type(arena)?),
                 Rc::new(r.try_to_type(arena)?),
             )),
@@ -75,7 +75,7 @@ impl Typing {
                 r.display_with(arena, f)?;
                 f.write_str(")")
             }
-            Typing::Comma(l, r) => {
+            Typing::Pair(l, r) => {
                 f.write_str("(")?;
                 l.display_with(arena, f)?;
                 f.write_str(", ")?;
@@ -107,7 +107,7 @@ impl Debug for Typing {
             Typing::Unit => f.write_str("()"),
             Typing::Var(var) => write!(f, "{var:?}"),
             Typing::Arrow(l, r) => write!(f, "({:?} -> {:?})", l, r),
-            Typing::Comma(l, r) => write!(f, "({:?}, {:?})", l, r),
+            Typing::Pair(l, r) => write!(f, "({:?}, {:?})", l, r),
             Typing::List(inner) => write!(f, "[{:?}]", inner),
             Typing::TmpTyVar(tmp) => write!(f, "?{}", tmp.0),
         }

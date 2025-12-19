@@ -451,7 +451,7 @@ impl<'a> StdLibDefiner<'a> {
         let c = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("c"));
         self.def_instance_with_constraints(
             show_class.clone(),
-            [Type::Comma(Type::Var(b).into(), Type::Var(c).into())],
+            [Type::Pair(Type::Var(b).into(), Type::Var(c).into())],
             [b, c],
             [
                 Instance {

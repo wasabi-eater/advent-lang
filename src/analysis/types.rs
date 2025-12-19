@@ -26,7 +26,7 @@ pub enum Type {
     Var(TyVar),
     List(Rc<Type>),
     Arrow(Rc<Type>, Rc<Type>),
-    Comma(Rc<Type>, Rc<Type>),
+    Pair(Rc<Type>, Rc<Type>),
 }
 impl Type {
     pub fn subst(&self, subst: &FxHashMap<TyVar, Type>) -> Type {
@@ -36,7 +36,7 @@ impl Type {
             Type::Var(_) => self.clone(),
             Type::List(inner) => Type::List(Rc::new(inner.subst(subst))),
             Type::Arrow(l, r) => Type::Arrow(Rc::new(l.subst(subst)), Rc::new(r.subst(subst))),
-            Type::Comma(l, r) => Type::Comma(Rc::new(l.subst(subst)), Rc::new(r.subst(subst))),
+            Type::Pair(l, r) => Type::Pair(Rc::new(l.subst(subst)), Rc::new(r.subst(subst))),
         }
     }
     pub fn list(inner: impl Into<Rc<Type>>) -> Self {
@@ -46,7 +46,7 @@ impl Type {
         Type::Arrow(param.into(), ret.into())
     }
     pub fn comma(left: impl Into<Rc<Type>>, right: impl Into<Rc<Type>>) -> Self {
-        Type::Comma(left.into(), right.into())
+        Type::Pair(left.into(), right.into())
     }
 
     fn assume_subst_inner(&self, r: &Type, subst: &mut FxHashMap<TyVar, Type>) -> bool {
@@ -68,7 +68,7 @@ impl Type {
             (Type::Arrow(lp, lr), Type::Arrow(rp, rr)) => {
                 Self::assume_subst_inner(lp, rp, subst) && Self::assume_subst_inner(lr, rr, subst)
             }
-            (Type::Comma(ll, lr), Type::Comma(rl, rr)) => {
+            (Type::Pair(ll, lr), Type::Pair(rl, rr)) => {
                 Self::assume_subst_inner(ll, rl, subst) && Self::assume_subst_inner(lr, rr, subst)
             }
             (Type::List(l_inner), Type::List(r_inner)) => {
@@ -97,7 +97,7 @@ impl Debug for Type {
             Type::Var(var) => write!(f, "var{:?}", var.index()),
             Type::List(inner) => write!(f, "[{inner:?}]"),
             Type::Arrow(l, r) => write!(f, "{l:?} -> {r:?}"),
-            Type::Comma(l, r) => write!(f, "({l:?}, {r:?})"),
+            Type::Pair(l, r) => write!(f, "({l:?}, {r:?})"),
         }
     }
 }

@@ -28,7 +28,7 @@ pub enum Kind {
     App(Rc<Kind>, Rc<Kind>),
     Arrow(Rc<Kind>, Rc<Kind>),
     Unit,
-    Comma(Rc<Kind>, Rc<Kind>),
+    Pair(Rc<Kind>, Rc<Kind>),
     List(Rc<Kind>),
 }
 #[derive(Clone, PartialEq, Eq)]
@@ -45,7 +45,7 @@ pub struct KindLike {
 #[derive(Clone, PartialEq, Eq)]
 pub enum Pattern {
     Ident(Rc<str>),
-    Comma(Rc<Pattern>, Rc<Pattern>),
+    Pair(Rc<Pattern>, Rc<Pattern>),
     Wildcard,
     Unit,
 }
@@ -99,7 +99,7 @@ impl Debug for Kind {
             Self::Ident(name) => f.write_str(name),
             Self::App(fu, p) => write!(f, "({fu:?} {p:?})"),
             Self::Arrow(l, r) => write!(f, "({l:?} -> {r:?})"),
-            Self::Comma(l, r) => write!(f, "({l:?}, {r:?})"),
+            Self::Pair(l, r) => write!(f, "({l:?}, {r:?})"),
             Self::List(inner) => write!(f, "[{inner:?}]"),
             Self::Unit => f.write_str("()"),
         }
@@ -150,7 +150,7 @@ impl Debug for Pattern {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Pattern::Ident(name) => f.write_str(name),
-            Pattern::Comma(l, r) => write!(f, "({l:?}, {r:?})"),
+            Pattern::Pair(l, r) => write!(f, "({l:?}, {r:?})"),
             Pattern::Unit => f.write_str("()"),
             Pattern::Wildcard => f.write_str("_"),
         }

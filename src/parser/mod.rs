@@ -184,7 +184,7 @@ fn kind_term<'a>(
         .clone()
         .then_ignore(just(Token::Comma))
         .repeated()
-        .foldr(kind.clone(), |l, r| Rc::new(Kind::Comma(l, r)))
+        .foldr(kind.clone(), |l, r| Rc::new(Kind::Pair(l, r)))
         .delimited_by(just(Token::ParenOpen), just(Token::ParenClose));
     let list = kind
         .delimited_by(just(Token::BracketOpen), just(Token::BracketClose))
@@ -256,7 +256,7 @@ fn pattern<'a>() -> impl Parser<'a, &'a [Token], Rc<Pattern>> + Clone {
             .clone()
             .then_ignore(just(Token::Comma))
             .repeated()
-            .foldr(pattern.clone(), |l, r| Rc::new(Pattern::Comma(l, r)))
+            .foldr(pattern.clone(), |l, r| Rc::new(Pattern::Pair(l, r)))
             .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
             .or(unit);
         let wildcard = just(Token::Underscore).to(Rc::new(Pattern::Wildcard));

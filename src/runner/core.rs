@@ -221,7 +221,7 @@ impl Runner {
                 self.scope.vars.insert(var_id, Variable::Var(obj));
                 Ok(())
             }
-            Pattern::Comma(l, r) => {
+            Pattern::Pair(l, r) => {
                 let Object::Comma(left, right) = &*obj else {
                     panic!("expected comma object for comma pattern")
                 };

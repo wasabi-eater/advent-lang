@@ -138,10 +138,10 @@ fn unify(
             unify(l_inner, r_inner, arena, expr)?;
             Ok(Typing::List(Rc::clone(l_inner)))
         }
-        (Typing::Comma(ll, lr), Typing::Comma(rl, rr)) => {
+        (Typing::Pair(ll, lr), Typing::Pair(rl, rr)) => {
             unify(ll, rl, arena, expr.clone())?;
             unify(lr, rr, arena, expr)?;
-            Ok(Typing::Comma(Rc::clone(ll), Rc::clone(lr)))
+            Ok(Typing::Pair(Rc::clone(ll), Rc::clone(lr)))
         }
         (&Typing::TmpTyVar(l), &Typing::TmpTyVar(r)) => {
             unify_tmp_var_id(l, r, arena, expr)?;
@@ -505,10 +505,10 @@ impl InferencePool {
                 Ok(Typing::TmpTyVar(tmp_id))
             }
             Pattern::Unit => Ok(Typing::Unit),
-            Pattern::Comma(l, r) => {
+            Pattern::Pair(l, r) => {
                 let l_ty = self.infer_pat(l.clone())?;
                 let r_ty = self.infer_pat(r.clone())?;
-                Ok(Typing::Comma(Rc::new(l_ty), Rc::new(r_ty)))
+                Ok(Typing::Pair(Rc::new(l_ty), Rc::new(r_ty)))
             }
             Pattern::Wildcard => {
                 let tmp_id = self.tmp_var_arena.alloc_unassigned();
@@ -626,7 +626,7 @@ impl InferencePool {
                 Rc::new(self.eval_kind(l, name_ty_map)?),
                 Rc::new(self.eval_kind(r, name_ty_map)?),
             )),
-            ast::Kind::Comma(l, r) => Ok(Type::Comma(
+            ast::Kind::Pair(l, r) => Ok(Type::Pair(
                 Rc::new(self.eval_kind(l, name_ty_map)?),
                 Rc::new(self.eval_kind(r, name_ty_map)?),
             )),
@@ -891,7 +891,7 @@ impl InferencePool {
                 Ok(())
             }
             Pattern::Unit => Ok(()),
-            Pattern::Comma(l, r) => {
+            Pattern::Pair(l, r) => {
                 self.set_program_data_pat(l.clone(), program_data_builder)?;
                 self.set_program_data_pat(r.clone(), program_data_builder)?;
                 Ok(())

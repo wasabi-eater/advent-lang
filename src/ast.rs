@@ -21,6 +21,7 @@ pub enum Expr {
     Def(Rc<str>, Rc<Expr>, KindLike),
     Lambda(Rc<Pattern>, Rc<Expr>),
     ImplicitArg,
+    Typed(Rc<Expr>, Rc<Kind>),
 }
 #[derive(Clone, PartialEq, Eq)]
 pub enum Kind {
@@ -89,6 +90,7 @@ impl Debug for Expr {
             Expr::Def(name, expr, kind_like) => write!(f, "def {name}: {kind_like:?} = {expr:?}"),
             Expr::Lambda(pat, body) => write!(f, "(\\{pat:?} -> {body:?})"),
             Expr::ImplicitArg => write!(f, "_"),
+            Expr::Typed(inner, kind) => write!(f, "({inner:?} : {kind:?})"),
         }
     }
 }

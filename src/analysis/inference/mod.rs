@@ -206,13 +206,15 @@ pub struct InferencePool {
     instance_arena: InstanceArena,
     implicit_arg_index: FxHashMap<ExprRef, usize>,
     partial_app_arg_types: FxHashMap<ExprRef, Vector<Typing>>,
+    type_scope: im_rc::HashMap<Rc<str>, Type, fxhash::FxBuildHasher>,
 }
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 pub struct Scope {
     vars: im_rc::HashMap<Rc<str>, VarType, fxhash::FxBuildHasher>,
     implicit_arg_count: Option<usize>,
     implicit_arg_types: Vector<Typing>,
 }
+
 #[derive(Clone)]
 enum VarType {
     Def(TypeScheme),
@@ -254,6 +256,12 @@ impl InferencePool {
             instance_arena: InstanceArena::default(),
             implicit_arg_index: FxHashMap::default(),
             partial_app_arg_types: FxHashMap::default(),
+            type_scope: im_rc::HashMap::from_iter([
+                (Rc::from("Int"), Type::Int),
+                (Rc::from("Float"), Type::Float),
+                (Rc::from("String"), Type::String),
+                (Rc::from("Bool"), Type::Bool)
+            ])
         }
     }
     pub fn extern_type_class(&mut self, type_class: TypeClassRef) {
@@ -451,7 +459,8 @@ impl InferencePool {
                 Ok(Typing::Unit)
             }
             Expr::Let(name, assigned_expr, Some(kind)) => {
-                let ty = self.eval_kind(kind, &Self::std_defined_type_name())?;
+                let out_type_scope = self.type_scope.clone();
+                let ty = self.eval_kind(kind)?;
                 let assigned_ty = self.infer(assigned_expr.clone())?;
                 let pat_ty = Typing::from(&ty, &FxHashMap::default());
                 unify(
@@ -466,9 +475,11 @@ impl InferencePool {
                     &mut self.tmp_var_arena,
                     assigned_expr.clone(),
                 )?;
+                self.type_scope = out_type_scope;
                 Ok(Typing::Unit)
             }
             Expr::Def(name, assigned_expr, kind_like) => {
+                let out_type_scope = self.type_scope.clone();
                 let type_scheme = self.eval_kindlike(kind_like)?;
                 let ty = Typing::from(&type_scheme.ty, &FxHashMap::default());
                 let var_ty = VarType::Def(type_scheme);
@@ -481,6 +492,7 @@ impl InferencePool {
                     assigned_expr.clone(),
                 )?;
                 self.def_type.insert(ExprRef(expr), var_ty);
+                self.type_scope = out_type_scope;
                 Ok(Typing::Unit)
             }
             Expr::Lambda(pat, body) => {
@@ -493,6 +505,17 @@ impl InferencePool {
             Expr::ImplicitArg => Ok(self.scope.implicit_arg_types
                 [self.implicit_arg_index[&ExprRef(expr.clone())]]
                 .clone()),
+            Expr::Typed(inner, ty) => {
+                let expected_ty = self.eval_kind(ty)?;
+                let inferred_ty = self.infer(inner.clone())?;
+                unify(
+                    &inferred_ty,
+                    &Typing::from(&expected_ty, &FxHashMap::default()),
+                    &mut self.tmp_var_arena,
+                    inner.clone(),
+                )?;
+                Ok(Typing::from(&expected_ty, &FxHashMap::default()))
+            }
         }
     }
     fn infer_pat(&mut self, pattern: Rc<Pattern>) -> errors::Result<Typing> {
@@ -553,53 +576,39 @@ impl InferencePool {
             }
             Expr::Member(_, _) => todo!(),
             Expr::Lambda(_, _) => Ok(()),
+            Expr::Typed(inner, _) => self.set_implicit_index(inner.clone()),
         }
     }
-    fn std_defined_type_name() -> FxHashMap<Rc<str>, Type> {
-        FxHashMap::from_iter([
-            ("Int".into(), Type::Int),
-            ("Float".into(), Type::Float),
-            ("String".into(), Type::String),
-            ("Bool".into(), Type::Bool),
-        ])
-    }
     fn eval_kindlike(&mut self, kind_like: &ast::KindLike) -> errors::Result<TypeScheme> {
-        let name_tyvar_map: FxHashMap<Rc<str>, TyVar> = kind_like
+        let bound_vars = kind_like
             .bound_vars
             .iter()
             .map(|name| {
-                (
-                    name.clone(),
-                    self.tyvar_arena.alloc(TyVarBody {
-                        name: Some(name.to_string()),
-                    }),
-                )
+                self.tyvar_arena.alloc(TyVarBody {
+                    name: Some(name.to_string()),
+                })
             })
-            .collect();
-        let mut name_ty_map: FxHashMap<Rc<str>, Type> = name_tyvar_map
-            .clone()
-            .into_iter()
-            .map(|(name, ty_var)| (name, Type::Var(ty_var)))
-            .collect();
-        name_ty_map.extend(Self::std_defined_type_name());
-        let ty = self.eval_kind(&kind_like.kind, &name_ty_map)?;
+            .collect::<Vector<TyVar>>();
+        for (name, bound_var) in kind_like.bound_vars.iter().zip(&bound_vars) {
+            self.type_scope.insert(
+                name.clone(),
+                Type::Var(*bound_var),
+            );
+        }
+        let ty = self.eval_kind(&kind_like.kind)?;
         let constraints: Vector<Rc<Instance>> = kind_like
             .constraints
             .iter()
-            .map(|constraint| self.eval_constraint(constraint, &name_ty_map))
+            .map(|constraint| self.eval_constraint(constraint))
             .map_ok(Rc::new)
             .try_collect()?;
         Ok(TypeScheme {
-            bound_vars: name_tyvar_map.into_values().collect(),
+            bound_vars,
             ty: Rc::new(ty),
             constraints,
         })
     }
-    fn eval_constraint(
-        &mut self,
-        constraint: &ast::Constraint,
-        name_ty_map: &FxHashMap<Rc<str>, Type>,
-    ) -> errors::Result<Instance> {
+    fn eval_constraint(&mut self, constraint: &ast::Constraint) -> errors::Result<Instance> {
         let type_class = self
             .type_classes
             .get(&constraint.type_class)
@@ -608,34 +617,31 @@ impl InferencePool {
         let args = constraint
             .args
             .iter()
-            .map(|arg| self.eval_kind(arg, name_ty_map))
+            .map(|arg| self.eval_kind(arg))
             .collect::<errors::Result<Vector<Type>>>()?;
         Ok(Instance {
             class: type_class,
             assigned_types: args,
         })
     }
-    fn eval_kind(
-        &mut self,
-        kind: &ast::Kind,
-        name_ty_map: &FxHashMap<Rc<str>, Type>,
-    ) -> errors::Result<Type> {
+    fn eval_kind(&mut self, kind: &ast::Kind) -> errors::Result<Type> {
         match kind {
             ast::Kind::App(_, _) => todo!(),
             ast::Kind::Arrow(l, r) => Ok(Type::Arrow(
-                Rc::new(self.eval_kind(l, name_ty_map)?),
-                Rc::new(self.eval_kind(r, name_ty_map)?),
+                Rc::new(self.eval_kind(l)?),
+                Rc::new(self.eval_kind(r)?),
             )),
             ast::Kind::Pair(l, r) => Ok(Type::Pair(
-                Rc::new(self.eval_kind(l, name_ty_map)?),
-                Rc::new(self.eval_kind(r, name_ty_map)?),
+                Rc::new(self.eval_kind(l)?),
+                Rc::new(self.eval_kind(r)?),
             )),
-            ast::Kind::Ident(name) => name_ty_map
+            ast::Kind::Ident(name) => self
+                .type_scope
                 .get(name)
                 .cloned()
                 .ok_or_else(|| errors::Error::UndefiedIdent(name.clone())),
             ast::Kind::Unit => Ok(Type::Unit),
-            ast::Kind::List(inner) => Ok(Type::List(Rc::new(self.eval_kind(inner, name_ty_map)?))),
+            ast::Kind::List(inner) => Ok(Type::List(Rc::new(self.eval_kind(inner)?))),
         }
     }
     pub fn create_program_data(mut self, expr: Rc<Expr>) -> errors::Result<ProgramData> {
@@ -862,6 +868,7 @@ impl InferencePool {
                 );
                 Ok(())
             }
+            Expr::Typed(inner, _) => self.set_program_data(inner.clone(), program_data_builder),
         }
     }
     fn set_program_data_pat(

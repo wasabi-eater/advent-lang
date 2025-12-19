@@ -113,7 +113,6 @@ pub fn tokenize(src: &str) -> Option<Vec<Token>> {
         .ok()
 }
 
-
 fn ident<'s>(lex: &Lexer<'s, Token>) -> Rc<str> {
     let s = lex.slice();
     if s.starts_with('`') && s.ends_with('`') {

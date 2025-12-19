@@ -209,6 +209,7 @@ impl Runner {
                 let index = self.program_data.implicit_arg_index[&ExprRef(expr.clone())];
                 Ok(self.scope.implicit_args[index].clone())
             }
+            Expr::Typed(inner, _) => self.eval(inner.clone()),
             Expr::BinOp(_, _, _) => unreachable!(),
             Expr::UnOp(_, _) => unreachable!(),
             Expr::Member(_, _) => todo!(),

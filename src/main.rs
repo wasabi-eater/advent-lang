@@ -97,3 +97,36 @@ fn test() {
     let mut runner = Runner::new(program_data, std_lib);
     println!("{:?}", runner.eval(ast).unwrap());
 }
+#[test]
+fn test2() {
+    use indoc::indoc;
+    let src = indoc! {r#"
+    34: Int;
+    3.4: Float;
+    "Hoge": String;
+    [0, 1, 2]: [Int];
+    [[0, 1, 2], [3, 4, 5]]: [[Int]];
+    23 + 34: Int;
+    3.4 + 5.6: Float;
+    "Hello, " + "world!": String;
+    {\x -> x}: Int -> Int;
+    def id: forall a. a -> a = {\x -> x}: a -> a;
+    id: Int -> Int;
+    "#};
+    let tokens = lexer::tokenize(src).expect("Tokenize failed!");
+    println!("tokens: {tokens:?}");
+    let result = parser::program().parse(&tokens).into_result();
+    let ast = match result {
+        Ok(expr) => expr,
+        Err(e) => panic!("error: {e:?}"),
+    };
+    println!("{ast:?}");
+    let mut inference_pool = InferencePool::new();
+    let std_lib = StdLibDefiner::new(&mut inference_pool).build();
+    let infered = inference_pool.infer(ast.clone()).unwrap();
+    println!("infered: {}", inference_pool.display(infered));
+    let program_data = inference_pool.create_program_data(ast.clone()).unwrap();
+    println!("run!");
+    let mut runner = Runner::new(program_data, std_lib);
+    println!("{:?}", runner.eval(ast).unwrap());
+}

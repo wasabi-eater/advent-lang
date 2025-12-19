@@ -108,7 +108,13 @@ fn expr<'a>(
         let expr4 = choice((just(Token::Minus), just(Token::Exclamation)))
             .repeated()
             .foldr(expr3, move |op, e| Rc::new(Expr::UnOp(op, e)));
-        bin_ops(expr4)
+        let bin_ops = bin_ops(expr4);
+        bin_ops
+            .then(just(Token::Colon).ignore_then(kind()).or_not())
+            .map(|(inner, kind)| match kind {
+                Some(kind) => Rc::new(Expr::Typed(inner, kind)),
+                None => inner,
+            })
     })
 }
 fn bin_ops<'a>(

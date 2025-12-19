@@ -18,7 +18,7 @@ pub enum Expr {
     Brace(Vec<Rc<Expr>>),
     Unit,
     Let(Rc<Pattern>, Rc<Expr>, Option<Rc<Kind>>),
-    Def(Rc<str>, Rc<Expr>, KindLike),
+    Def(Rc<str>, Rc<Expr>, Option<KindLike>),
     Lambda(Rc<Pattern>, Rc<Expr>),
     ImplicitArg,
     Typed(Rc<Expr>, Rc<Kind>),

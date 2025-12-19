@@ -111,11 +111,11 @@ fn type_declaration_test() {
         Ok(Expr::Def(
             "unknown".into(),
             Expr::Ident("panic".into()).into(),
-            KindLike {
+            Some(KindLike {
                 bound_vars: vec!["a".into()],
                 constraints: vec![],
                 kind: Kind::Ident("a".into()).into()
-            }
+            })
         )
         .into())
     );
@@ -142,14 +142,14 @@ fn type_declaration_test() {
         Ok(Expr::Def(
             "print".into(),
             Expr::Ident("unimplemented".into()).into(),
-            KindLike {
+            Some(KindLike {
                 bound_vars: vec!["a".into()],
                 constraints: vec![Constraint {
                     type_class: "Show".into(),
                     args: vec![Kind::Ident("a".into()).into()]
                 }],
                 kind: Kind::Arrow(Kind::Ident("a".into()).into(), Kind::Unit.into()).into()
-            }
+            })
         )
         .into())
     );

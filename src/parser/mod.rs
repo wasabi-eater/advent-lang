@@ -28,7 +28,7 @@ fn statement<'a>() -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
         choice((
             just(Token::Def)
                 .ignore_then(ident)
-                .then(just(Token::Colon).ignore_then(kind_like()))
+                .then(just(Token::Colon).ignore_then(kind_like()).or_not())
                 .then_ignore(just(Token::Equal))
                 .then(expr.clone())
                 .map(move |((name, kind_like), e)| Rc::new(Expr::Def(name, e, kind_like))),

@@ -478,7 +478,7 @@ impl InferencePool {
                 self.type_scope = out_type_scope;
                 Ok(Typing::Unit)
             }
-            Expr::Def(name, assigned_expr, kind_like) => {
+            Expr::Def(name, assigned_expr, Some(kind_like)) => {
                 let out_type_scope = self.type_scope.clone();
                 let type_scheme = self.eval_kindlike(kind_like)?;
                 let ty = Typing::from(&type_scheme.ty, &FxHashMap::default());
@@ -493,6 +493,15 @@ impl InferencePool {
                 )?;
                 self.def_type.insert(ExprRef(expr), var_ty);
                 self.type_scope = out_type_scope;
+                Ok(Typing::Unit)
+            }
+            Expr::Def(name, assigned_expr, None) => {
+                let typing = Typing::TmpTyVar(self.tmp_var_arena.alloc_unassigned());
+                let var_ty = VarType::Unannotated(typing.clone());
+                self.scope.vars.insert(name.clone(), var_ty.clone());
+                let assigned_ty = self.infer(assigned_expr.clone())?;
+                unify(&typing, &assigned_ty, &mut self.tmp_var_arena, assigned_expr.clone())?;
+                self.def_type.insert(ExprRef(expr), var_ty);
                 Ok(Typing::Unit)
             }
             Expr::Lambda(pat, body) => {
@@ -741,7 +750,7 @@ impl InferencePool {
                 self.set_program_data(p.clone(), program_data_builder)?;
                 Ok(())
             }
-            Expr::Def(name, assigned_expr, _) => {
+            Expr::Def(name, assigned_expr, Some(_)) => {
                 let VarType::Def(type_scheme) = self.def_type[&ExprRef(expr.clone())].clone()
                 else {
                     panic!("unexpected var type");
@@ -777,6 +786,27 @@ impl InferencePool {
                 self.set_program_data(assigned_expr.clone(), program_data_builder)?;
                 program_data_builder.constraints = old_constraints;
 
+                Ok(())
+            }
+            Expr::Def(name, assigned_expr, None) => {
+                let VarType::Unannotated(typing) = self.def_type[&ExprRef(expr.clone())].clone()
+                else {
+                    panic!("unexpected var type");
+                };
+                let ty = typing.try_to_type(&mut self.tmp_var_arena)?;
+                let type_scheme = TypeScheme::forall([], ty.clone());
+                let new_var_id = self.var_arena.alloc(VarData {
+                    name: name.clone(),
+                    ty: type_scheme.clone(),
+                    constraints: Vector::new(),
+                });
+                program_data_builder
+                    .new_scope
+                    .insert(name.clone(), (new_var_id, type_scheme));
+                program_data_builder
+                    .def_var_ids
+                    .insert(ExprRef(expr.clone()), new_var_id);
+                self.set_program_data(assigned_expr.clone(), program_data_builder)?;
                 Ok(())
             }
             Expr::Let(pattern, assigned_expr, _) => {

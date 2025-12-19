@@ -5,7 +5,7 @@ let fizz_buzz = {\i ->
     '(show i)))
 };
 
-def range: Int -> Int -> [Int] = {\s e ->
+def range = {\s e ->
     if (s == e) '[]
     '([s] + range(s + 1) e)
 };

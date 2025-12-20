@@ -1230,6 +1230,72 @@ impl<'a> StdLibDefiner<'a> {
                 }
             ),
         );
+
+        // (a -> b -> a) -> a -> [b] -> a
+        let type_sheme = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+            TypeScheme::forall(
+                [a, b],
+                Type::arrow(
+                    Type::arrow(Type::Var(a), Type::arrow(Type::Var(b), Type::Var(a))),
+                    Type::arrow(
+                        Type::Var(a),
+                        Type::arrow(Type::list(Type::Var(b)), Type::Var(a)),
+                    ),
+                ),
+            )
+        };
+        self.def_func(
+            "foldl",
+            type_sheme,
+            curry3!([], runner,
+                (Object::Func(f), init, Object::List(elems)) => {
+                    let mut acc = Rc::new(init.clone());
+                    for elem in elems.iter() {
+                        let applied = runner.call(&f, acc.clone())?;
+                        let Object::Func(f2) = &*applied else {
+                            panic!("foldl function did not return a function");
+                        };
+                        acc = runner.call(f2, elem.clone())?;
+                    }
+                    Ok(acc)
+                }
+            ),
+        );
+
+        // (a -> b -> b) -> b -> [a] -> b
+        let type_sheme = {
+            let a = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("a"));
+            let b = self.inference_pool.tyvar_arena().alloc(TyVarBody::new("b"));
+            TypeScheme::forall(
+                [a, b],
+                Type::arrow(
+                    Type::arrow(Type::Var(a), Type::arrow(Type::Var(b), Type::Var(b))),
+                    Type::arrow(
+                        Type::Var(b),
+                        Type::arrow(Type::list(Type::Var(a)), Type::Var(b)),
+                    ),
+                ),
+            )
+        };
+        self.def_func(
+            "foldr",
+            type_sheme,
+            curry3!([], runner,
+                (Object::Func(f), init, Object::List(elems)) => {
+                    let mut acc = Rc::new(init.clone());
+                    for elem in elems.iter().rev() {
+                        let applied = runner.call(&f, elem.clone())?;
+                        let Object::Func(f2) = &*applied else {
+                            panic!("foldr function did not return a function");
+                        };
+                        acc = runner.call(f2, acc.clone())?;
+                    }
+                    Ok(acc)
+                }
+            ),
+        );
     }
     fn def_func_functions(&mut self) {
         let type_sheme = {

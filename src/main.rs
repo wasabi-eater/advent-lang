@@ -112,6 +112,9 @@ fn test2() {
     {\x -> x}: Int -> Int;
     def id: forall a. a -> a = {\x -> x}: a -> a;
     id: Int -> Int;
+
+    foldl {_ + _} 0 [1, 2, 3, 4, 5] |> print;
+    foldr {_ + _} 0 [1, 2, 3, 4, 5] |> print;
     "#};
     let tokens = lexer::tokenize(src).expect("Tokenize failed!");
     println!("tokens: {tokens:?}");

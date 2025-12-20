@@ -57,7 +57,7 @@ fn expr<'a>(
         let ident = select! {
             Token::Ident(s) => s
         };
-        let implicit_arg = just(Token::Underscore).to(Rc::new(Expr::ImplicitArg));
+        let implicit_arg = just(Token::Underscore).map(|_| Rc::new(Expr::ImplicitArg));
         let var = ident.map(move |name| Rc::new(Expr::Ident(name)));
         let unit = just(Token::ParenOpen)
             .then(just(Token::ParenClose))
@@ -197,7 +197,7 @@ fn kind_term<'a>(
         .map(|inner| Rc::new(Kind::List(inner)));
     let unit = just(Token::ParenOpen)
         .then(just(Token::ParenClose))
-        .to(Rc::new(Kind::Unit));
+        .map(|_| Rc::new(Kind::Unit));
     choice((ident, paren, list, unit))
 }
 fn kind<'a>() -> impl Parser<'a, &'a [Token], Rc<Kind>> + Clone {

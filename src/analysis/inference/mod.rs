@@ -1,6 +1,5 @@
 #[cfg(test)]
 pub mod test;
-pub mod typing;
 
 use fxhash::FxHashMap;
 use im_rc::Vector;
@@ -11,26 +10,20 @@ use super::types::*;
 use crate::ast::Pattern;
 use crate::{
     analysis::errors,
-    ast::{self, Expr},
+    ast::{self, Expr, Span},
     lexer::Token,
 };
-use core::fmt;
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
-use typing::Typing;
+
+
 
 #[derive(Clone, Copy, Debug)]
 enum TmpTyVar {
     Root { size: usize },
     Ref(TmpTyVarId),
 }
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TmpTyVarId(usize);
-impl Debug for TmpTyVarId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "?{}", self.0)
-    }
-}
-#[derive(Clone)]
+
+#[derive(Clone, Debug)]
 pub struct TmpTyVarArena {
     tmp_ty_vars: RefCell<Vec<TmpTyVar>>,
     group_ty: FxHashMap<TmpTyVarId, Typing>,
@@ -348,12 +341,12 @@ impl InferencePool {
     }
     pub fn infer_inner(&mut self, expr: Rc<Expr>) -> errors::Result<Typing> {
         match &*expr {
-            Expr::LitInt(_) => Ok(Typing::Int),
-            Expr::LitFloat(_) => Ok(Typing::Float),
-            Expr::LitStr(_) => Ok(Typing::String),
-            Expr::Unit => Ok(Typing::Unit),
-            Expr::LitBool(_) => Ok(Typing::Bool),
-            Expr::LitList(items) => {
+            Expr::LitInt(_, _) => Ok(Typing::Int),
+            Expr::LitFloat(_, _) => Ok(Typing::Float),
+            Expr::LitStr(_, _) => Ok(Typing::String),
+            Expr::Unit(_) => Ok(Typing::Unit),
+            Expr::LitBool(_, _) => Ok(Typing::Bool),
+            Expr::LitList(items, _) => {
                 let inner_id = self.tmp_var_arena.alloc_unassigned();
                 for item in items {
                     let inner_ty = self.infer(item.clone())?;
@@ -366,8 +359,8 @@ impl InferencePool {
                 }
                 Ok(Typing::List(Typing::TmpTyVar(inner_id).into()))
             }
-            Expr::Brace(statements) if statements.is_empty() => Ok(Typing::Unit),
-            Expr::Brace(statements) => {
+            Expr::Brace(statements, _) if statements.is_empty() => Ok(Typing::Unit),
+            Expr::Brace(statements, _) => {
                 let scope = self.scope.clone();
                 self.scope.implicit_arg_count = Some(0);
                 self.scope.implicit_arg_types = Vector::new();
@@ -396,7 +389,7 @@ impl InferencePool {
                 self.scope = scope;
                 Ok(ty)
             }
-            Expr::AppFun(f, param) => {
+            Expr::AppFun(f, param, _) => {
                 let f_ty = self.infer(f.clone())?;
                 let param_ty = self.infer(param.clone())?;
                 let tmp_id = self.tmp_var_arena.alloc_unassigned();
@@ -408,26 +401,26 @@ impl InferencePool {
                 )?;
                 Ok(Typing::TmpTyVar(tmp_id))
             }
-            Expr::BinOp(l, op, r) => {
-                let op_ident = Rc::new(Expr::Ident(op.binop_to_str().into()));
-                let app_fun = Rc::new(Expr::AppFun(op_ident, l.clone()));
-                let app_fun2 = Rc::new(Expr::AppFun(app_fun, r.clone()));
+            Expr::BinOp(l, op, r, _) => {
+                let op_ident = Rc::new(Expr::Ident(op.binop_to_str().into(), Span::dummy()));
+                let app_fun = Rc::new(Expr::AppFun(op_ident, l.clone(), Span::dummy()));
+                let app_fun2 = Rc::new(Expr::AppFun(app_fun, r.clone(), Span::dummy()));
                 self.desugared.insert(ExprRef(expr), app_fun2.clone());
                 self.infer(app_fun2)
             }
-            Expr::UnOp(op, operand) => {
+            Expr::UnOp(op, operand, _) => {
                 if *op == Token::Apostrophe {
                     let operand_ty = self.infer(operand.clone())?;
                     Ok(Typing::Arrow(Typing::Unit.into(), operand_ty.into()))
                 } else {
-                    let op_ident = Rc::new(Expr::Ident(op.binop_to_str().into()));
-                    let app_fun = Rc::new(Expr::AppFun(op_ident, operand.clone()));
+                    let op_ident = Rc::new(Expr::Ident(op.binop_to_str().into(), Span::dummy()));
+                    let app_fun = Rc::new(Expr::AppFun(op_ident, operand.clone(), Span::dummy()));
                     self.desugared.insert(ExprRef(expr), app_fun.clone());
                     self.infer(app_fun)
                 }
             }
-            Expr::Member(_, _) => todo!(),
-            Expr::Ident(name) => {
+            Expr::Member(_, _, _) => todo!(),
+            Expr::Ident(name, _) => {
                 if let Some(var_ty) = self.scope.vars.get(name) {
                     match var_ty.clone() {
                         VarType::Def(type_scheme) => Ok(self.embody(&type_scheme)),
@@ -447,7 +440,7 @@ impl InferencePool {
                     Err(errors::Error::UndefiedIdent(name.clone()))
                 }
             }
-            Expr::Let(pat, assigned_expr, None) => {
+            Expr::Let(pat, assigned_expr, None, _) => {
                 let assigned_ty = self.infer(assigned_expr.clone())?;
                 let pat_ty = self.infer_pat(pat.clone())?;
                 unify(
@@ -458,7 +451,7 @@ impl InferencePool {
                 )?;
                 Ok(Typing::Unit)
             }
-            Expr::Let(name, assigned_expr, Some(kind)) => {
+            Expr::Let(name, assigned_expr, Some(kind), _) => {
                 let out_type_scope = self.type_scope.clone();
                 let ty = self.eval_kind(kind)?;
                 let assigned_ty = self.infer(assigned_expr.clone())?;
@@ -478,7 +471,7 @@ impl InferencePool {
                 self.type_scope = out_type_scope;
                 Ok(Typing::Unit)
             }
-            Expr::Def(name, assigned_expr, Some(kind_like)) => {
+            Expr::Def(name, assigned_expr, Some(kind_like), _) => {
                 let out_type_scope = self.type_scope.clone();
                 let type_scheme = self.eval_kindlike(kind_like)?;
                 let ty = Typing::from(&type_scheme.ty, &FxHashMap::default());
@@ -495,7 +488,7 @@ impl InferencePool {
                 self.type_scope = out_type_scope;
                 Ok(Typing::Unit)
             }
-            Expr::Def(name, assigned_expr, None) => {
+            Expr::Def(name, assigned_expr, None, _) => {
                 let typing = Typing::TmpTyVar(self.tmp_var_arena.alloc_unassigned());
                 let var_ty = VarType::Unannotated(typing.clone());
                 self.scope.vars.insert(name.clone(), var_ty.clone());
@@ -504,17 +497,17 @@ impl InferencePool {
                 self.def_type.insert(ExprRef(expr), var_ty);
                 Ok(Typing::Unit)
             }
-            Expr::Lambda(pat, body) => {
+            Expr::Lambda(pat, body, _) => {
                 let old_scope = self.scope.clone();
                 let pat_ty = self.infer_pat(pat.clone())?;
                 let body_ty = self.infer(body.clone())?;
                 self.scope = old_scope;
                 Ok(Typing::Arrow(pat_ty.into(), body_ty.into()))
             }
-            Expr::ImplicitArg => Ok(self.scope.implicit_arg_types
+            Expr::ImplicitArg(_) => Ok(self.scope.implicit_arg_types
                 [self.implicit_arg_index[&ExprRef(expr.clone())]]
                 .clone()),
-            Expr::Typed(inner, ty) => {
+            Expr::Typed(inner, ty, _) => {
                 let expected_ty = self.eval_kind(ty)?;
                 let inferred_ty = self.infer(inner.clone())?;
                 unify(
@@ -550,7 +543,7 @@ impl InferencePool {
     }
     pub fn set_implicit_index(&mut self, expr: Rc<Expr>) -> errors::Result<()> {
         match &*expr {
-            Expr::ImplicitArg => {
+            Expr::ImplicitArg(_) => {
                 let Some(count) = self.scope.implicit_arg_count.as_mut() else {
                     return Err(errors::Error::EscapingImplicitArg);
                 };
@@ -559,33 +552,33 @@ impl InferencePool {
                     .insert(ExprRef(expr.clone()), *count - 1);
                 Ok(())
             }
-            Expr::Brace(_) => Ok(()),
-            Expr::AppFun(f, p) => {
+            Expr::Brace(_, _) => Ok(()),
+            Expr::AppFun(f, p, _) => {
                 self.set_implicit_index(f.clone())?;
                 self.set_implicit_index(p.clone())
             }
-            Expr::UnOp(_, operand) => self.set_implicit_index(operand.clone()),
-            Expr::BinOp(l, _, r) => {
+            Expr::UnOp(_, operand, _) => self.set_implicit_index(operand.clone()),
+            Expr::BinOp(l, _, r, _) => {
                 self.set_implicit_index(l.clone())?;
                 self.set_implicit_index(r.clone())
             }
-            Expr::Ident(_) => Ok(()),
-            Expr::LitBool(_)
-            | Expr::LitStr(_)
-            | Expr::LitInt(_)
-            | Expr::LitFloat(_)
-            | Expr::Unit => Ok(()),
-            Expr::Let(_, assigned_expr, _) => self.set_implicit_index(assigned_expr.clone()),
-            Expr::Def(_, assigned_expr, _) => self.set_implicit_index(assigned_expr.clone()),
-            Expr::LitList(items) => {
+            Expr::Ident(_, _) => Ok(()),
+            Expr::LitBool(_, _)
+            | Expr::LitStr(_, _)
+            | Expr::LitInt(_, _)
+            | Expr::LitFloat(_, _)
+            | Expr::Unit(_) => Ok(()),
+            Expr::Let(_, assigned_expr, _, _) => self.set_implicit_index(assigned_expr.clone()),
+            Expr::Def(_, assigned_expr, _, _) => self.set_implicit_index(assigned_expr.clone()),
+            Expr::LitList(items, _) => {
                 for item in items {
                     self.set_implicit_index(item.clone())?;
                 }
                 Ok(())
             }
-            Expr::Member(_, _) => todo!(),
-            Expr::Lambda(_, _) => Ok(()),
-            Expr::Typed(inner, _) => self.set_implicit_index(inner.clone()),
+            Expr::Member(_, _, _) => todo!(),
+            Expr::Lambda(_, _, _) => Ok(()),
+            Expr::Typed(inner, _, _) => self.set_implicit_index(inner.clone()),
         }
     }
     fn eval_kindlike(&mut self, kind_like: &ast::KindLike) -> errors::Result<TypeScheme> {
@@ -726,31 +719,31 @@ impl InferencePool {
             return self.set_program_data(desugared.clone(), program_data_builder);
         }
         match &*expr {
-            Expr::LitInt(_)
-            | Expr::LitFloat(_)
-            | Expr::LitStr(_)
-            | Expr::Unit
-            | Expr::LitBool(_) => Ok(()),
-            Expr::ImplicitArg => Ok(()),
-            Expr::LitList(items) => {
+            Expr::LitInt(_, _)
+            | Expr::LitFloat(_, _)
+            | Expr::LitStr(_, _)
+            | Expr::Unit(_)
+            | Expr::LitBool(_, _) => Ok(()),
+            Expr::ImplicitArg(_) => Ok(()),
+            Expr::LitList(items, _) => {
                 for item in items {
                     self.set_program_data(item.clone(), program_data_builder)?;
                 }
                 Ok(())
             }
-            Expr::BinOp(_, _, _) => unreachable!(),
-            Expr::UnOp(Token::Apostrophe, r) => {
+            Expr::BinOp(_, _, _, _) => unreachable!(),
+            Expr::UnOp(Token::Apostrophe, r, _) => {
                 self.set_program_data(r.clone(), program_data_builder)?;
                 Ok(())
             }
-            Expr::UnOp(_, _) => unreachable!(),
-            Expr::Member(_, _) => todo!(),
-            Expr::AppFun(f, p) => {
+            Expr::UnOp(_, _, _) => unreachable!(),
+            Expr::Member(_, _, _) => todo!(),
+            Expr::AppFun(f, p, _) => {
                 self.set_program_data(f.clone(), program_data_builder)?;
                 self.set_program_data(p.clone(), program_data_builder)?;
                 Ok(())
             }
-            Expr::Def(name, assigned_expr, Some(_)) => {
+            Expr::Def(name, assigned_expr, Some(_), _) => {
                 let VarType::Def(type_scheme) = self.def_type[&ExprRef(expr.clone())].clone()
                 else {
                     panic!("unexpected var type");
@@ -788,7 +781,7 @@ impl InferencePool {
 
                 Ok(())
             }
-            Expr::Def(name, assigned_expr, None) => {
+            Expr::Def(name, assigned_expr, None, _) => {
                 let VarType::Unannotated(typing) = self.def_type[&ExprRef(expr.clone())].clone()
                 else {
                     panic!("unexpected var type");
@@ -809,19 +802,19 @@ impl InferencePool {
                 self.set_program_data(assigned_expr.clone(), program_data_builder)?;
                 Ok(())
             }
-            Expr::Let(pattern, assigned_expr, _) => {
+            Expr::Let(pattern, assigned_expr, _, _) => {
                 self.set_program_data(assigned_expr.clone(), program_data_builder)?;
                 self.set_program_data_pat(pattern.clone(), program_data_builder)?;
                 Ok(())
             }
-            Expr::Lambda(pattern, body) => {
+            Expr::Lambda(pattern, body, _) => {
                 let out_scope = program_data_builder.new_scope.clone();
                 self.set_program_data_pat(pattern.clone(), program_data_builder)?;
                 self.set_program_data(body.clone(), program_data_builder)?;
                 program_data_builder.new_scope = out_scope;
                 Ok(())
             }
-            Expr::Brace(statements) => {
+            Expr::Brace(statements, _) => {
                 let out_scope = program_data_builder.new_scope.clone();
                 for statement in statements {
                     self.set_program_data(statement.clone(), program_data_builder)?;
@@ -829,7 +822,7 @@ impl InferencePool {
                 program_data_builder.new_scope = out_scope;
                 Ok(())
             }
-            Expr::Ident(name) => {
+            Expr::Ident(name, _) => {
                 let typing = self.expr_typing[&ExprRef(expr.clone())].typing.clone();
                 let ty = typing.try_to_type(&mut self.tmp_var_arena)?;
                 if let Some((var_id, type_scheme)) = program_data_builder.new_scope.get(name) {
@@ -898,7 +891,7 @@ impl InferencePool {
                 );
                 Ok(())
             }
-            Expr::Typed(inner, _) => self.set_program_data(inner.clone(), program_data_builder),
+            Expr::Typed(inner, _, _) => self.set_program_data(inner.clone(), program_data_builder),
         }
     }
     fn set_program_data_pat(

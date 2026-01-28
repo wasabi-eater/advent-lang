@@ -97,11 +97,11 @@ impl Runner {
             return self.eval(desugared.clone());
         }
         match &*expr {
-            Expr::LitInt(n) => Ok(Rc::new(Object::Int(n.parse().unwrap()))),
-            Expr::LitFloat(n) => Ok(Rc::new(Object::Float(n.parse().unwrap()))),
-            Expr::LitStr(s) => Ok(Rc::new(Object::String(Rc::new(s.to_string())))),
-            Expr::LitBool(b) => Ok(Rc::new(Object::Bool(*b))),
-            Expr::AppFun(f, p) => {
+            Expr::LitInt(n, _) => Ok(Rc::new(Object::Int(n.parse().unwrap()))),
+            Expr::LitFloat(n, _) => Ok(Rc::new(Object::Float(n.parse().unwrap()))),
+            Expr::LitStr(s, _) => Ok(Rc::new(Object::String(Rc::new(s.to_string())))),
+            Expr::LitBool(b, _) => Ok(Rc::new(Object::Bool(*b))),
+            Expr::AppFun(f, p, _) => {
                 let func = self.eval(f.clone())?;
                 let Object::Func(func) = &*func else {
                     panic!("expected function")
@@ -109,14 +109,14 @@ impl Runner {
                 let param = self.eval(p.clone())?;
                 self.call(func, param)
             }
-            Expr::LitList(items) => Ok(Rc::new(Object::List(
+            Expr::LitList(items, _) => Ok(Rc::new(Object::List(
                 items
                     .iter()
                     .map(|item| self.eval(item.clone()))
                     .try_collect()?,
             ))),
-            Expr::Unit => Ok(Rc::new(Object::Unit)),
-            Expr::Ident(name) => {
+            Expr::Unit(_) => Ok(Rc::new(Object::Unit)),
+            Expr::Ident(name, _) => {
                 let ident_ref = self.program_data.expr_ident_ref[&ExprRef(expr.clone())].clone();
 
                 let (data, mut given_instance) = match ident_ref {
@@ -139,7 +139,7 @@ impl Runner {
                 let data = self.read_var(&data, given_instance)?;
                 Ok(data)
             }
-            Expr::Brace(statements)
+            Expr::Brace(statements, _)
                 if self.program_data.partial_app_arg_types[&ExprRef(expr.clone())].is_empty() =>
             {
                 let out_scope = self.scope.clone();
@@ -150,28 +150,28 @@ impl Runner {
                 self.scope = out_scope;
                 Ok(result)
             }
-            Expr::Brace(_) => {
+            Expr::Brace(_, _) => {
                 let implicit_arg_count =
                     self.program_data.partial_app_arg_types[&ExprRef(expr.clone())].len();
                 Ok(Rc::new(Object::Func(Func::PartialApp(
                     expr.clone(),
-                    self.scope.clone(),
+                    Rc::new(self.scope.clone()),
                     implicit_arg_count,
                     im_rc::Vector::new(),
                 ))))
             }
-            Expr::Let(pattern, assigned_expr, _) => {
+            Expr::Let(pattern, assigned_expr, _, _) => {
                 let obj = self.eval(assigned_expr.clone())?;
                 self.assign_pattern(pattern.clone(), obj)?;
                 Ok(Rc::new(Object::Unit))
             }
-            Expr::Lambda(pat, body) => {
+            Expr::Lambda(pat, body, _) => {
                 let pat = pat.clone();
                 let body = body.clone();
-                let scope = self.scope.clone();
+                let scope = Rc::new(self.scope.clone());
                 Ok(Rc::new(Object::Func(Func::UserDefFunc(pat, body, scope))))
             }
-            Expr::Def(_, assigned_expr, _) => {
+            Expr::Def(_, assigned_expr, _, _) => {
                 let scope = Rc::new(RefCell::new(self.scope.clone()));
                 let var_id = self.program_data.def_var_ids[&ExprRef(expr.clone())];
                 let assigned_expr = assigned_expr.clone();
@@ -192,7 +192,7 @@ impl Runner {
                 *scope.borrow_mut() = self.scope.clone();
                 Ok(Rc::new(Object::Unit))
             }
-            Expr::UnOp(Token::Apostrophe, expr) => {
+            Expr::UnOp(Token::Apostrophe, expr, _) => {
                 let scope = self.scope.clone();
                 let expr = expr.clone();
                 Ok(Rc::new(native_func!(runner,
@@ -205,14 +205,14 @@ impl Runner {
                     }
                 )))
             }
-            Expr::ImplicitArg => {
+            Expr::ImplicitArg(_) => {
                 let index = self.program_data.implicit_arg_index[&ExprRef(expr.clone())];
                 Ok(self.scope.implicit_args[index].clone())
             }
-            Expr::Typed(inner, _) => self.eval(inner.clone()),
-            Expr::BinOp(_, _, _) => unreachable!(),
-            Expr::UnOp(_, _) => unreachable!(),
-            Expr::Member(_, _) => todo!(),
+            Expr::Typed(inner, _, _) => self.eval(inner.clone()),
+            Expr::BinOp(_, _, _, _) => unreachable!(),
+            Expr::UnOp(_, _, _) => unreachable!(),
+            Expr::Member(_, _, _) => todo!(),
         }
     }
     fn assign_pattern(&mut self, pat: Rc<Pattern>, obj: Rc<Object>) -> errors::Result<()> {
@@ -245,7 +245,7 @@ impl Runner {
             Func::NativeFunc(inner) => inner(self, param),
             Func::UserDefFunc(pat, body, def_scope) => {
                 let out_scope = self.scope.clone();
-                self.scope = def_scope.clone();
+                self.scope = (**def_scope).clone();
                 self.assign_pattern(pat.clone(), param)?;
                 let result = self.eval(body.clone());
                 self.scope = out_scope;
@@ -256,9 +256,9 @@ impl Runner {
                 new_args.push_back(param);
                 if new_args.len() == *arg_count {
                     let out_scope = self.scope.clone();
-                    self.scope = scope.clone();
+                    self.scope = (**scope).clone();
                     self.scope.implicit_args = new_args;
-                    let Expr::Brace(stmts) = &**expr else {
+                    let Expr::Brace(stmts, _) = &**expr else {
                         panic!("expected brace expression for partial app")
                     };
                     let mut result = Rc::new(Object::Unit);

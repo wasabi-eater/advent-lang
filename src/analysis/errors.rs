@@ -1,12 +1,15 @@
 use crate::{
     analysis::{
-        inference::{TmpTyVarArena, TmpTyVarId, typing::Typing},
-        types::{Instance, TypeClassRef},
+        inference::TmpTyVarArena,
+        types::{Instance, TypeClassRef, TmpTyVarId, Typing},
     },
     ast::Expr,
 };
-use std::{fmt::Debug, rc::Rc};
+use std::fmt;
+use std::rc::Rc;
 
+
+#[derive(Debug)]
 pub enum Error {
     UndefiedIdent(Rc<str>),
     TypeMismatch {
@@ -38,13 +41,12 @@ pub enum Error {
     },
     EscapingImplicitArg,
 }
-pub type Result<T> = std::result::Result<T, Error>;
 
-impl Debug for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UndefiedIdent(name) => write!(f, "undefined ident: {name}!"),
-            Self::UnknownType { tmp_id, .. } => write!(f, "{:?} is unspecified!", tmp_id),
+            Self::UndefiedIdent(name) => write!(f, "undefined ident: {name}"),
+            Self::UnknownType { tmp_id, .. } => write!(f, "{:?} is unspecified", tmp_id),
             Self::AmbiguousInstance { instance } => {
                 write!(f, "overload unspecified of {}: (", instance.class.0.name)?;
                 for ty in &instance.assigned_types {
@@ -96,3 +98,5 @@ impl Debug for Error {
         }
     }
 }
+
+pub type Result<T> = std::result::Result<T, Error>;

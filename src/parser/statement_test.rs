@@ -1,5 +1,6 @@
 use super::*;
 use std::rc::Rc;
+use crate::ast::Span;
 fn parser<'stream>() -> impl Parser<'stream, &'stream [Token], Rc<Expr>> + Clone {
     statement().then_ignore(end())
 }
@@ -17,9 +18,10 @@ fn expr_test() {
     assert_eq!(
         parser().parse(&input).into_result(),
         Ok(Expr::BinOp(
-            Expr::LitInt("34".into()).into(),
+            Expr::LitInt("34".into(), Span::dummy()).into(),
             Token::Plus,
-            Expr::LitInt("2".into()).into()
+            Expr::LitInt("2".into(), Span::dummy()).into(),
+            Span::dummy()
         )
         .into())
     );
@@ -29,7 +31,7 @@ fn var_test() {
     let input = [Token::Ident("v".into())];
     assert_eq!(
         parser().parse(&input).into_result(),
-        Ok(Expr::Ident("v".into()).into())
+        Ok(Expr::Ident("v".into(), Span::dummy()).into())
     );
 }
 
@@ -45,8 +47,9 @@ fn let_test() {
         parser().parse(&input).into_result(),
         Ok(Expr::Let(
             Pattern::Ident("v".into()).into(),
-            Expr::LitInt("23".into()).into(),
-            None
+            Expr::LitInt("23".into(), Span::dummy()).into(),
+            None,
+            Span::dummy()
         )
         .into())
     );
@@ -65,8 +68,9 @@ fn type_declaration_test() {
         parser().parse(&input).into_result(),
         Ok(Expr::Let(
             Pattern::Ident("x".into()).into(),
-            Expr::LitInt("5".into()).into(),
-            Some(Kind::Ident("Int".into()).into())
+            Expr::LitInt("5".into(), Span::dummy()).into(),
+            Some(Kind::Ident("Int".into()).into()),
+            Span::dummy()
         )
         .into())
     );
@@ -84,14 +88,15 @@ fn type_declaration_test() {
         parser().parse(&input).into_result(),
         Ok(Expr::Let(
             Pattern::Ident("x".into()).into(),
-            Expr::Ident("id".into()).into(),
+            Expr::Ident("id".into(), Span::dummy()).into(),
             Some(
                 Kind::Arrow(
                     Kind::Ident("Int".into()).into(),
                     Kind::Ident("Int".into()).into()
                 )
                 .into()
-            )
+            ),
+            Span::dummy()
         )
         .into())
     );
@@ -110,12 +115,13 @@ fn type_declaration_test() {
         parser().parse(&input).into_result(),
         Ok(Expr::Def(
             "unknown".into(),
-            Expr::Ident("panic".into()).into(),
+            Expr::Ident("panic".into(), Span::dummy()).into(),
             Some(KindLike {
                 bound_vars: vec!["a".into()],
                 constraints: vec![],
                 kind: Kind::Ident("a".into()).into()
-            })
+            }),
+            Span::dummy()
         )
         .into())
     );
@@ -141,7 +147,7 @@ fn type_declaration_test() {
         parser().parse(&input).into_result(),
         Ok(Expr::Def(
             "print".into(),
-            Expr::Ident("unimplemented".into()).into(),
+            Expr::Ident("unimplemented".into(), Span::dummy()).into(),
             Some(KindLike {
                 bound_vars: vec!["a".into()],
                 constraints: vec![Constraint {
@@ -149,7 +155,8 @@ fn type_declaration_test() {
                     args: vec![Kind::Ident("a".into()).into()]
                 }],
                 kind: Kind::Arrow(Kind::Ident("a".into()).into(), Kind::Unit.into()).into()
-            })
+            }),
+            Span::dummy()
         )
         .into())
     );
@@ -171,12 +178,13 @@ fn statements_test() {
         parser_statements().parse(&input).into_result(),
         Ok(vec![
             Expr::BinOp(
-                Expr::LitFloat("5.0".into()).into(),
+                Expr::LitFloat("5.0".into(), Span::dummy()).into(),
                 Token::Plus,
-                Expr::Ident("x".into()).into()
+                Expr::Ident("x".into(), Span::dummy()).into(),
+                Span::dummy()
             )
             .into(),
-            Expr::Ident("x".into()).into()
+            Expr::Ident("x".into(), Span::dummy()).into()
         ])
     );
 
@@ -195,14 +203,16 @@ fn statements_test() {
         Ok(vec![
             Expr::Let(
                 Pattern::Ident("x".into()).into(),
-                Expr::LitFloat("2.3".into()).into(),
-                None
+                Expr::LitFloat("2.3".into(), Span::dummy()).into(),
+                None,
+                Span::dummy()
             )
             .into(),
             Expr::BinOp(
-                Expr::LitFloat("5.0".into()).into(),
+                Expr::LitFloat("5.0".into(), Span::dummy()).into(),
                 Token::Plus,
-                Expr::Ident("x".into()).into()
+                Expr::Ident("x".into(), Span::dummy()).into(),
+                Span::dummy()
             )
             .into()
         ])

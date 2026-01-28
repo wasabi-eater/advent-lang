@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Constraint, Expr, Kind, KindLike, Pattern},
+    ast::{Constraint, Expr, Kind, KindLike, Pattern, Span},
     lexer::Token,
 };
 use chumsky::prelude::*;
@@ -17,7 +17,7 @@ pub fn program<'a>() -> impl Parser<'a, &'a [Token], Rc<Expr>> {
         .allow_trailing()
         .collect::<Vec<Rc<Expr>>>()
         .then_ignore(end())
-        .map(|stmts| Rc::new(Expr::Brace(stmts)))
+        .map(|stmts| Rc::new(Expr::Brace(stmts, Span::dummy())))
 }
 fn statement<'a>() -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
     recursive(|statement| {
@@ -31,13 +31,13 @@ fn statement<'a>() -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
                 .then(just(Token::Colon).ignore_then(kind_like()).or_not())
                 .then_ignore(just(Token::Equal))
                 .then(expr.clone())
-                .map(move |((name, kind_like), e)| Rc::new(Expr::Def(name, e, kind_like))),
+                .map(move |((name, kind_like), e)| Rc::new(Expr::Def(name, e, kind_like, Span::dummy()))),
             just(Token::Let)
                 .ignore_then(pattern())
                 .then(just(Token::Colon).ignore_then(kind()).or_not())
                 .then_ignore(just(Token::Equal))
                 .then(expr.clone())
-                .map(move |((name, kind), e)| Expr::Let(name, e, kind).into()),
+                .map(move |((name, kind), e)| Expr::Let(name, e, kind, Span::dummy()).into()),
             expr,
         ))
     })
@@ -47,21 +47,21 @@ fn expr<'a>(
 ) -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
     recursive(move |expr: Recursive<dyn Parser<'_, &[Token], Rc<Expr>>>| {
         let literal = select! {
-            Token::Int(n) => Expr::LitInt(n),
-            Token::Float(n) => Expr::LitFloat(n),
-            Token::Str(s) => Expr::LitStr(s),
-            Token::True => Expr::LitBool(true),
-            Token::False => Expr::LitBool(false),
+            Token::Int(n) => Expr::LitInt(n, Span::dummy()),
+            Token::Float(n) => Expr::LitFloat(n, Span::dummy()),
+            Token::Str(s) => Expr::LitStr(s, Span::dummy()),
+            Token::True => Expr::LitBool(true, Span::dummy()),
+            Token::False => Expr::LitBool(false, Span::dummy()),
         }
         .map(Rc::new);
         let ident = select! {
             Token::Ident(s) => s
         };
-        let implicit_arg = just(Token::Underscore).map(|_| Rc::new(Expr::ImplicitArg));
-        let var = ident.map(move |name| Rc::new(Expr::Ident(name)));
+        let implicit_arg = just(Token::Underscore).map(|_| Rc::new(Expr::ImplicitArg(Span::dummy())));
+        let var = ident.map(move |name| Rc::new(Expr::Ident(name, Span::dummy())));
         let unit = just(Token::ParenOpen)
             .then(just(Token::ParenClose))
-            .to(Expr::Unit)
+            .to(Expr::Unit(Span::dummy()))
             .map(Rc::new);
         let paren = infixr(expr.clone(), just(Token::Comma))
             .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
@@ -80,39 +80,39 @@ fn expr<'a>(
             .delimited_by(just(Token::BraceOpen), just(Token::BraceClose))
             .map(move |(param, stmts)| match param {
                 Some(params) => {
-                    let body = Rc::new(Expr::Brace(stmts));
+                    let body = Rc::new(Expr::Brace(stmts, Span::dummy()));
                     params
                         .into_iter()
                         .rev()
-                        .fold(body, |acc, pat| Rc::new(Expr::Lambda(pat, acc)))
+                        .fold(body, |acc, pat| Rc::new(Expr::Lambda(pat, acc, Span::dummy())))
                 }
-                None => Rc::new(Expr::Brace(stmts)),
+                None => Rc::new(Expr::Brace(stmts, Span::dummy())),
             });
         let list = expr
             .clone()
             .separated_by(just(Token::Comma))
             .collect::<Vec<_>>()
             .delimited_by(just(Token::BracketOpen), just(Token::BracketClose))
-            .map(move |list| Rc::new(Expr::LitList(list)));
+            .map(move |list| Rc::new(Expr::LitList(list, Span::dummy())));
         let expr0 = choice((literal, var, paren, brace, list, implicit_arg));
         let expr1 = expr0.foldl(
             just(Token::Dot).ignore_then(ident).repeated(),
-            move |e, name| Rc::new(Expr::Member(e, name)),
+            move |e, name| Rc::new(Expr::Member(e, name, Span::dummy())),
         );
         let expr2 = just(Token::Apostrophe)
             .repeated()
-            .foldr(expr1, move |op, e| Rc::new(Expr::UnOp(op, e)));
+            .foldr(expr1, move |op, e| Rc::new(Expr::UnOp(op, e, Span::dummy())));
         let expr3 = expr2.clone().foldl(expr2.repeated(), move |f, param| {
-            Rc::new(Expr::AppFun(f, param))
+            Rc::new(Expr::AppFun(f, param, Span::dummy()))
         });
         let expr4 = choice((just(Token::Minus), just(Token::Exclamation)))
             .repeated()
-            .foldr(expr3, move |op, e| Rc::new(Expr::UnOp(op, e)));
+            .foldr(expr3, move |op, e| Rc::new(Expr::UnOp(op, e, Span::dummy())));
         let bin_ops = bin_ops(expr4);
         bin_ops
             .then(just(Token::Colon).ignore_then(kind()).or_not())
             .map(|(inner, kind)| match kind {
-                Some(kind) => Rc::new(Expr::Typed(inner, kind)),
+                Some(kind) => Rc::new(Expr::Typed(inner, kind, Span::dummy())),
                 None => inner,
             })
     })
@@ -154,7 +154,7 @@ fn infixl<'a>(
 ) -> impl Parser<'a, &'a [Token], Rc<Expr>> + Clone {
     expr.clone()
         .foldl(op.then(expr).repeated(), |l, (op, r)| {
-            Rc::new(Expr::BinOp(l, op, r))
+            Rc::new(Expr::BinOp(l, op, r, Span::dummy()))
         })
         .boxed()
 }
@@ -165,7 +165,7 @@ fn infixr<'a>(
     expr.clone()
         .then(op)
         .repeated()
-        .foldr(expr, |(l, op), r| Rc::new(Expr::BinOp(l, op, r)))
+        .foldr(expr, |(l, op), r| Rc::new(Expr::BinOp(l, op, r, Span::dummy())))
         .boxed()
 }
 fn infix<'a>(
@@ -175,7 +175,7 @@ fn infix<'a>(
     expr.clone()
         .then(op.then(expr).or_not())
         .map(move |(l, succ)| match succ {
-            Some((op, r)) => Rc::new(Expr::BinOp(l, op, r)),
+            Some((op, r)) => Rc::new(Expr::BinOp(l, op, r, Span::dummy())),
             None => l,
         })
         .boxed()

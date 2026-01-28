@@ -20,8 +20,12 @@ pub enum Object {
 
 #[derive(Clone)]
 pub enum Func {
-    UserDefFunc(Rc<Pattern>, Rc<Expr>, Scope),
-    PartialApp(Rc<Expr>, Scope, usize, Vector<Rc<Object>>),
+    /// User-defined function: (parameter pattern, body expression, captured scope)
+    /// The Scope is wrapped in Rc to avoid deep cloning on each function call
+    UserDefFunc(Rc<Pattern>, Rc<Expr>, Rc<Scope>),
+    /// Partial application: (body expression, captured scope, argument count, captured args)
+    /// Scope sharing reduces memory overhead when storing partial applications
+    PartialApp(Rc<Expr>, Rc<Scope>, usize, Vector<Rc<Object>>),
     NativeFunc(NativeFuncInner),
 }
 pub type NativeFuncInner = Rc<dyn Fn(&mut Runner, Rc<Object>) -> errors::Result<Rc<Object>>>;
